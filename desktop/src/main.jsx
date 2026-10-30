@@ -222,7 +222,12 @@ function CalibrationPage({ call, notify }) {
 
   const calibrate = async () => {
     const value = await call('/api/calibrate', 'POST', { target });
-    setResult(value?.message || value?.state_label || '校准窗口已启动');
+    if (value?.ok) {
+      setResult('屏幕校准窗口已启动；客户端已最小化，请直接在炉石画面上拖动当前框。');
+      try { await api().window.control('minimize'); } catch { /* 窗口控制失败不影响校准层 */ }
+    } else {
+      setResult(value?.message || value?.error || '校准窗口启动失败');
+    }
   };
   const currentRegion = preview?.regions?.find((item) => item.key === target);
   const box = Array.isArray(currentRegion?.box) ? currentRegion.box : [];
@@ -247,7 +252,7 @@ function CalibrationPage({ call, notify }) {
         <div className="calibration-canvas">
           <CalibrationMockBoard visibleKeys={visibleKeys} />
         </div>
-        <div className="preview-note"><Icon name="info" size={14} />这里显示的是图1样式的用途示意，不再把工具/浏览器桌面截图放进来；右侧坐标仍来自引擎，精确位置请打开屏幕校准窗口。</div>
+        <div className="preview-note"><Icon name="info" size={14} />这里显示的是图1样式的用途示意，不在此画布内拖框；点击右侧按钮会启动真实屏幕校准层并最小化客户端，右侧坐标来自引擎。</div>
         {previewError && <div className="preview-note preview-error"><Icon name="info" size={14} />{previewError}</div>}
       </div>
       <div className="panel region-params">
@@ -259,7 +264,7 @@ function CalibrationPage({ call, notify }) {
         <NumberRow label="宽度" value={width} />
         <NumberRow label="高度" value={height} />
         <button className="wide-button gold" onClick={calibrate}><Icon name="crosshair" size={15} />打开校准窗口</button>
-        <div className="instruction-box"><Icon name="info" size={15} /><span>操作说明<br />1. 选择左侧目标<br />2. 打开屏幕校准窗口<br />3. 拖动蓝框中心调整位置，拖右下角调整大小<br />4. 按 S 保存全部区域，按 Esc 退出</span></div>
+        <div className="instruction-box"><Icon name="info" size={15} /><span>操作说明<br />1. 选择左侧目标并确保炉石已启动<br />2. 点击打开屏幕校准窗口，客户端会自动最小化<br />3. 直接在炉石画面上拖动当前框，拖右下角调整大小<br />4. 按 S 保存全部区域，按 Esc 退出校准层</span></div>
         <p className="muted-text">{result}</p>
       </div>
     </div>
