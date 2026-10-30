@@ -342,6 +342,19 @@ class LogTrimTests(TempLogsCase):
 
         replace.assert_not_called()
 
+    def test_non_persistent_log_stays_in_realtime_ring_only(self):
+        start_seq = web_ui._log_seq
+        with (
+            patch.object(web_ui, "_overlay_key", return_value=False),
+            patch.object(web_ui, "_record_battle") as record,
+        ):
+            web_ui._log("INFO", "[CDP] raw event", persist=False)
+
+        lines, _ = web_ui.take_logs_after(start_seq)
+        self.assertEqual("[CDP] raw event", lines[-1]["msg"])
+        self.assertFalse(self.runtime.exists())
+        record.assert_not_called()
+
     def test_trim_helper_returns_false_for_a_missing_file(self):
         self.assertFalse(web_ui._trim_runtime_log(self.tmp / "nope.txt", time.time()))
 

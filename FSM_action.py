@@ -1,4 +1,5 @@
 import _thread
+import json
 import random
 import re
 import sys
@@ -71,6 +72,7 @@ mulligan_reader = None
 recommendation_validator = None
 cdp_event_store = None
 cdp_client = None
+_runtime_log_sink = None
 active_game_generation = -1
 mulligan_delay_generation = None
 player_turn_delay_key = None
@@ -97,6 +99,49 @@ restart_watchdog = default_watchdog()
 _liveness_alert = None
 # 连续“推荐读取失败（RETRY）”次数：只作为存活告警文案里的旁证，帮助判断卡在哪。
 _ocr_fail_streak = 0
+
+
+def set_runtime_log_sink(sink):
+    """设置控制台实时日志接收器。
+
+    Electron 客户端需要看到 CDP 成功回调，但不应再绕道 stdout 捕获。
+    None 会恢复兼容旧控制台的 stdout 日志路径。
+    """
+    global _runtime_log_sink
+    _runtime_log_sink = sink if callable(sink) else None
+
+
+def _runtime_log(level: str, message: str) -> None:
+    sink = _runtime_log_sink
+    if sink is not None:
+        try:
+            sink(level, str(message))
+            return
+        except Exception:
+            pass
+    try:
+        sys_print(f"[{level}] {message}")
+    except Exception:
+        pass
+
+
+def _log_cdp_event(event) -> None:
+    """把 CDP 成功事件送入实时日志；完整 raw 仍由事件 journal 落盘。"""
+    raw = getattr(event, "raw", None)
+    if not raw:
+        raw = {
+            "schema": getattr(event, "schema", ""),
+            "kind": getattr(event, "kind", ""),
+            "callback": getattr(event, "callback", ""),
+            "payload": getattr(event, "payload", {}),
+            "raw_args": list(getattr(event, "raw_args", ()) or ()),
+        }
+    try:
+        payload = json.dumps(
+            raw, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        payload = repr(raw)
+    _runtime_log("INFO", f"[CDP] {payload}")
 # 调试快照写盘节流：日志每次变化都全量序列化整个 log_state 会拖慢主循环，
 # 只在间隔 SNAPSHOT_WRITE_INTERVAL 秒后重新写盘。（定义于 config.py）
 _last_snapshot_write = 0.0
@@ -207,10 +252,17 @@ def initialize_recommendation_automation():
                 recommendation_config.cdp_port,
                 url_contains=recommendation_config.cdp_target_url_contains,
                 event_store=cdp_event_store,
-                on_error=lambda message: sys_print(
+                on_event=_log_cdp_event,
+                on_error=lambda message: _runtime_log(
+                    "ERROR",
                     f"[CDP] {message}"),
             )
             cdp_client.start_background()
+            _runtime_log(
+                "INFO",
+                f"[CDP] 监听已启动：{recommendation_config.cdp_host}:"
+                f"{recommendation_config.cdp_port}",
+            )
             recommendation_reader = CdpRecommendationReader(
                 cdp_event_store,
                 wait_timeout=recommendation_config.cdp_wait_timeout_seconds,

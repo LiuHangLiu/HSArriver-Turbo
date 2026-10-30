@@ -1,8 +1,11 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from src.cdp.hsbox_events import (
     CdpEventError,
+    HsboxEventJournal,
     HsboxEventStore,
     event_key,
     parse_event,
@@ -80,6 +83,23 @@ class HsboxEventTests(unittest.TestCase):
         current_sequence, current = store.snapshot()
         self.assertEqual(sequence, current_sequence)
         self.assertIs(event, current)
+
+    def test_journal_is_bounded_and_keeps_complete_json_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            journal = HsboxEventJournal(
+                path, max_bytes=900, keep_bytes=600, trim_interval=0)
+            for index in range(20):
+                journal.append(event_payload([{
+                    "actionName": "play_minion",
+                    "card": {"cardId": f"TEST_{index:02d}"},
+                }]))
+
+            self.assertLessEqual(path.stat().st_size, 900)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertTrue(lines)
+            for line in lines:
+                self.assertIsInstance(json.loads(line), dict)
 
 
 if __name__ == "__main__":

@@ -320,7 +320,12 @@ def _trim_runtime_log(path, now: float) -> bool:
             return False
 
 
-def _log(level: str, msg: str):
+def _log(level: str, msg: str, *, persist: bool = True):
+    """写入运行日志环。
+
+    persist=False 只进入内存环和客户端实时日志，不写普通运行日志文件，
+    适合高频的 CDP 原始事件；完整事件仍由 HsboxEventJournal 单独保留。
+    """
     global _log_seq
     with _log_lock:
         _log_seq += 1
@@ -332,6 +337,8 @@ def _log(level: str, msg: str):
                 "msg": str(msg),
             }
         )
+    if not persist:
+        return
     # 统一推入日志浮窗（关键行），与自动化日志同通道、按时间先后。
     # 浮窗若出现异常绝不能让日志系统把主流程一起拖垮。
     if log_overlay is not None and _overlay_key(str(msg)):
@@ -1072,6 +1079,13 @@ def _start_automation(reset_stats: bool = True):
         traceback.print_exc()
         return False, f"自动化组件加载失败：{exc}"
     fsm = CTRL.fsm
+    # CDP 成功事件直接进入客户端内存日志环，避免走 stdout -> TeeStream ->
+    # _log 的长链路；原始完整事件仍由 CDP JSONL journal 保留。
+    try:
+        fsm.set_runtime_log_sink(
+            lambda level, message: _log(level, message, persist=False))
+    except Exception:
+        pass
     # 重置运行状态；每次“打开脚本/开始对战”时战绩清零，从 0 计；
     # 浮窗「恢复」续跑（reset_stats=False）不清零，从上次的场数/胜场继续累加。
     fsm.quitting_flag = False
@@ -1084,6 +1098,10 @@ def _start_automation(reset_stats: bool = True):
         fsm.print_info_init()
         fsm.init()
     except Exception as exc:
+        try:
+            fsm.set_runtime_log_sink(None)
+        except Exception:
+            pass
         traceback.print_exc()
         return False, f"自动化初始化失败：{exc}"
     CTRL.last_error = None

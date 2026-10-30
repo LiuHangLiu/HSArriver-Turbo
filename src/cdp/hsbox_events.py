@@ -230,11 +230,50 @@ def event_key(event: HsboxRecommendationEvent, action_index: int = 0) -> str:
 
 
 class HsboxEventJournal:
-    """Append-only JSONL journal used for diagnostics and later adaptation."""
+    """Bounded JSONL journal used for diagnostics and later adaptation."""
 
-    def __init__(self, path: str | Path | None = None):
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        max_bytes: int = 2 * 1024 * 1024,
+        keep_bytes: int = 512 * 1024,
+        trim_interval: float = 60.0,
+    ):
         self.path = Path(path) if path else None
+        self.max_bytes = max(0, int(max_bytes))
+        self.keep_bytes = max(0, int(keep_bytes))
+        self.trim_interval = max(0.0, float(trim_interval))
+        self._last_trim_at = 0.0
         self._lock = threading.Lock()
+
+    def _trim_if_needed(self) -> None:
+        if self.path is None or self.max_bytes <= 0 or self.keep_bytes <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_trim_at < self.trim_interval:
+            return
+        try:
+            size = self.path.stat().st_size
+            if size <= self.max_bytes:
+                return
+            with self.path.open("rb") as handle:
+                handle.seek(max(0, size - self.keep_bytes))
+                tail = handle.read()
+            # 丢弃尾部截取产生的半行，保证 journal 仍是合法 JSONL。
+            if b"\n" in tail:
+                tail = tail[tail.find(b"\n") + 1:]
+            if not tail:
+                # 单条 raw 事件可能比 keep_bytes 还长；这种情况下保留最后
+                # 一条完整事件，而不是把 journal 裁成空文件。
+                tail = self.path.read_bytes().splitlines(keepends=True)[-1:]
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_bytes(b"".join(tail) if isinstance(tail, list) else tail)
+            tmp.replace(self.path)
+            self._last_trim_at = now
+        except OSError:
+            # 诊断日志不能影响推荐主链路；下一次 append 再尝试裁剪。
+            return
 
     def append(self, value: HsboxRecommendationEvent | Mapping[str, Any]) -> None:
         if self.path is None:
@@ -257,8 +296,10 @@ class HsboxEventJournal:
             raw = dict(value)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
-        with self._lock, self.path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+        with self._lock:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+            self._trim_if_needed()
 
 
 class HsboxEventStore:
