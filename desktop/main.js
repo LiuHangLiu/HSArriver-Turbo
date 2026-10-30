@@ -20,6 +20,7 @@ let engineProcess;
 let enginePort;
 let engineError = '';
 let boxProcess;
+let boxPid = 0;
 let boxError = '';
 
 function runtimeRoot() {
@@ -182,41 +183,117 @@ function resolveBoxExecutable(folder) {
   throw new Error('目录内没有找到 HSAng.exe。');
 }
 
-async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
-  if (boxProcess && !boxProcess.killed) return { ok: true, running: true, reused: true };
-  const executable = resolveBoxExecutable(folder);
-  boxError = '';
-  const child = spawn(executable, [
-    `--remote-debugging-port=${Number(port)}`,
-    '--remote-debugging-address=127.0.0.1',
-  ], {
-    cwd: path.dirname(executable),
-    windowsHide: false,
-    stdio: 'ignore',
-  });
-  boxProcess = child;
+function isProcessAlive(pid) {
+  if (!pid) return false;
   try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isBoxRunning() {
+  if (boxProcess && !boxProcess.killed) return true;
+  if (boxPid && isProcessAlive(boxPid)) return true;
+  boxPid = 0;
+  return false;
+}
+
+function powershellQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function encodePowerShell(command) {
+  return Buffer.from(command, 'utf16le').toString('base64');
+}
+
+async function startBoxThroughShell(executable, args) {
+  const command = [
+    `$process = Start-Process -FilePath ${powershellQuote(executable)}`,
+    `-ArgumentList @(${args.map(powershellQuote).join(',')})`,
+    `-WorkingDirectory ${powershellQuote(path.dirname(executable))}`,
+    '-PassThru -ErrorAction Stop;',
+    '[Console]::Out.Write($process.Id)',
+  ].join(' ');
+  const launcher = spawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-EncodedCommand',
+    encodePowerShell(command),
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return new Promise((resolve, reject) => {
+    let output = '';
+    let errorOutput = '';
+    launcher.stdout?.on('data', (data) => { output += String(data); });
+    launcher.stderr?.on('data', (data) => { errorOutput += String(data); });
+    launcher.once('error', reject);
+    launcher.once('close', (code) => {
+      const pid = Number.parseInt(output.trim(), 10);
+      if (code === 0 && Number.isInteger(pid) && pid > 0) {
+        resolve({ pid });
+        return;
+      }
+      const detail = errorOutput.trim() || output.trim() || `PowerShell 退出码 ${code}`;
+      reject(new Error(`Windows Shell 启动失败：${detail}`));
+    });
+  });
+}
+
+async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
+  const cdpPort = Number(port) || DEFAULT_CDP_PORT;
+  if (isBoxRunning()) return { ok: true, running: true, reused: true };
+  if ((await cdpSnapshot(cdpPort)).connected) {
+    return { ok: true, running: true, reused: true, cdp: true };
+  }
+  const executable = resolveBoxExecutable(folder);
+  const args = [
+    `--remote-debugging-port=${cdpPort}`,
+    '--remote-debugging-address=127.0.0.1',
+  ];
+  boxError = '';
+  let child;
+  try {
+    child = spawn(executable, args, {
+      cwd: path.dirname(executable),
+      windowsHide: false,
+      stdio: 'ignore',
+    });
     await new Promise((resolve, reject) => {
       child.once('spawn', resolve);
       child.once('error', reject);
     });
   } catch (error) {
-    boxError = `${error.name}: ${error.message}`;
+    if (!['EACCES', 'EPERM'].includes(error?.code)) {
+      boxError = `${error.name}: ${error.message}`;
+      boxProcess = undefined;
+      throw error;
+    }
+    const shellResult = await startBoxThroughShell(executable, args);
     boxProcess = undefined;
-    throw error;
+    boxPid = shellResult.pid;
+    boxError = '';
   }
-  child.on('error', (error) => { boxError = `${error.name}: ${error.message}`; });
-  child.on('exit', (code) => {
-    if (code && code !== 0) boxError = `盒子进程退出：${code}`;
-    boxProcess = undefined;
-  });
+  if (child) {
+    boxProcess = child;
+    boxPid = child.pid || 0;
+    child.on('error', (error) => { boxError = `${error.name}: ${error.message}`; });
+    child.on('exit', (code) => {
+      if (code && code !== 0) boxError = `盒子进程退出：${code}`;
+      if (boxProcess === child) boxProcess = undefined;
+      if (boxPid === child.pid) boxPid = 0;
+    });
+  }
   const config = await saveUiConfig({
     hsbox_dir: folder,
     recommendation: {
       ...(loadUiConfig().recommendation || {}),
       source: 'cdp',
       host: '127.0.0.1',
-      port: Number(port),
+      port: cdpPort,
     },
   });
   return { ok: true, running: true, executable, config };
@@ -238,7 +315,7 @@ async function getStatus() {
     engine,
     configFull: config,
     box: {
-      running: Boolean(boxProcess && !boxProcess.killed),
+      running: isBoxRunning() || cdp.connected,
       error: boxError,
       directory: config.hsbox_dir || '',
     },
