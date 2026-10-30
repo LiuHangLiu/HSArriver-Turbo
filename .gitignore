@@ -20,6 +20,7 @@ tmp*/
 dist/
 build/
 HSArriverTurbo-Phase1.spec
+HSArriverTurbo-Desktop.spec
 .superpowers/
 
 .reasonix/
