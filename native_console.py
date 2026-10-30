@@ -396,6 +396,13 @@ class NativeConsole(tk.Tk):
         decks = self._panel(page, "卡组识别投降")
         self._check(decks, "surrender_enabled", "启用卡组识别投降")
         ttk.Label(decks, text="配置 JSON（与原有 auto_surrender 结构一致）", style="Panel.TLabel").pack(anchor="w")
+        search_row = ttk.Frame(decks, style="Panel.TFrame")
+        search_row.pack(fill="x", pady=(4, 2))
+        self.vars["card_search"] = tk.StringVar()
+        ttk.Entry(search_row, textvariable=self.vars["card_search"], width=30).pack(side="left")
+        ttk.Button(search_row, text="搜索卡牌", command=self._search_card).pack(side="left", padx=6)
+        self.vars["card_search_result"] = tk.StringVar(value="输入中文卡名后搜索候选 ID")
+        ttk.Label(decks, textvariable=self.vars["card_search_result"], style="Panel.TLabel", wraplength=760).pack(anchor="w")
         self.surrender_json = tk.Text(decks, height=16, bg="#10141b", fg=self.COLORS["text"], insertbackground=self.COLORS["text"], relief="flat")
         self.surrender_json.pack(fill="both", expand=True, pady=6)
         ttk.Button(decks, text="保存卡组投降规则", command=self._save_surrender).pack(anchor="e")
@@ -451,7 +458,7 @@ class NativeConsole(tk.Tk):
         ttk.Label(page, text="校准", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
         panel = self._panel(page, "校准与界面识别")
         ttk.Label(panel, text="校准窗口会操作当前炉石界面；开始前请确认炉石在前台。", style="Panel.TLabel").pack(anchor="w", pady=(0, 8))
-        targets = ("", "main_menu_battle", "deck_select_title", "mulligan", "recommendation", "win_rate", "post_game_rank")
+        targets = ("", "recommendation_roi", "mulligan_recommendation_roi", "mulligan_confirm_roi", "ai_win_rate_roi", "ai_win_rate_wide_roi", "post_game_start_roi", "post_game_rank_roi", "main_menu_battle_roi", "deck_select_title_roi", "deck_grid_roi", "mode_menu_open", "mode_wild", "mode_standard", "mode_casual")
         self.vars["calibration_target"] = tk.StringVar(value="")
         ttk.Combobox(panel, textvariable=self.vars["calibration_target"], values=targets, state="readonly", width=30).pack(side="left")
         ttk.Button(panel, text="打开校准窗口", command=self._calibrate).pack(side="left", padx=6)
@@ -610,7 +617,7 @@ class NativeConsole(tk.Tk):
         except LicenseError as exc:
             self._show_error("授权失败", exc)
 
-    def _start_box(self) -> None:
+    def _start_box(self) -> bool:
         try:
             port = self._persist_runtime_config()
             if self.hsbox_process is not None and self.hsbox_process.poll() is None:
@@ -618,8 +625,10 @@ class NativeConsole(tk.Tk):
                 return
             self.hsbox_process = start_hsbox(self.vars["box_dir"].get().strip(), port)
             self._log(f"已启动盒子：{self.hsbox_process.args[0]}")
+            return True
         except Exception as exc:
             self._show_error("启动盒子失败", exc)
+            return False
 
     def _start_automation(self) -> None:
         try:
@@ -627,7 +636,8 @@ class NativeConsole(tk.Tk):
                 raise LicenseError("请先使用卡密激活，授权有效后才能挂机。")
             self._persist_runtime_config()
             if self.hsbox_process is None or self.hsbox_process.poll() is not None:
-                self._start_box()
+                if not self._start_box():
+                    return
         except Exception as exc:
             self._show_error("开始挂机失败", exc)
             return
@@ -690,6 +700,18 @@ class NativeConsole(tk.Tk):
             self._show_error("规则 JSON 无效", exc)
             return
         self._run_api("api_save_surrender_rules", {"config": raw, "confirm": True})
+
+    def _search_card(self) -> None:
+        try:
+            result = self.bridge.call("api_card_search", self.vars["card_search"].get(), 8)
+            cards = result.get("cards") or []
+            if cards:
+                text = "；".join(f"{card.get('name') or card.get('cardName')} ({','.join(card.get('ids') or [card.get('id', '')])})" for card in cards)
+            else:
+                text = "没有找到匹配卡牌"
+            self.vars["card_search_result"].set(text)
+        except Exception as exc:
+            self._show_error("卡牌搜索失败", exc)
 
     def _save_rank(self) -> None:
         self._run_api("api_save_rank_stop", {"enabled": self.vars["rank_enabled"].get(), "legend_number": self.vars["rank_number"].get(), "action": self.vars["rank_action"].get(), "mode": self.vars["rank_mode"].get()})
