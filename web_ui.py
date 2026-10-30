@@ -638,10 +638,34 @@ def api_selfcheck(force: bool = True) -> dict:
     return {"ok": True, "result": run_selfcheck(force=force)}
 
 
-def api_regions() -> dict:
-    """截一张屏幕并画出所有截图区域框（只截图，不点击、不移动鼠标）。"""
+def api_regions(target: str = "", show_all: bool = False) -> dict:
+    """返回校准预览截图。
+
+    默认接口保持旧行为：画出全部区域；桌面客户端传 ``target`` 时只画当前
+    校准目标，传 ``show_all`` 时画全部**可校准**目标。CDP 推荐、换牌推荐和
+    AI 胜率不属于这张校准预览。
+    """
+    target = str(target or "").strip()
+    legacy_all = not target and not show_all
+    calibration_keys = {
+        str(item.get("key"))
+        for item in screen_regions.calibration_targets(include_cdp=False)
+    }
+    if not legacy_all and not show_all and target not in calibration_keys:
+        return {
+            "ok": False,
+            "error": f"未知校准目标：{target or '未指定'}",
+            "targets": sorted(calibration_keys),
+        }
     try:
-        result = screen_regions.build_region_preview()
+        if legacy_all:
+            result = screen_regions.build_region_preview()
+        else:
+            result = screen_regions.build_region_preview(
+                include_cdp=False,
+                visible_keys=None if show_all else {target},
+                draw_probes=False,
+            )
     except Exception as exc:
         traceback.print_exc()
         return {"ok": False, "error": f"截图失败：{type(exc).__name__}: {exc}"}
@@ -672,6 +696,12 @@ def api_regions() -> dict:
                 f"（炉石未运行，客户区未知），已标注 "
                 f"{len(result.get('regions', []))} 个区域",
             )
+    if not legacy_all:
+        result["calibration"] = {
+            "target": target,
+            "show_all": bool(show_all),
+            "available_targets": sorted(calibration_keys),
+        }
     return {"ok": True, "result": result}
 
 
@@ -4423,7 +4453,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/selfcheck":
                 self._json(api_selfcheck(force=False))
             elif path == "/api/regions":
-                self._json(api_regions())
+                q = parse_qs(parsed.query)
+                target = q.get("target", [""])[0]
+                show_all = q.get("all", ["0"])[0].lower() in {
+                    "1", "true", "yes", "all"
+                }
+                self._json(api_regions(target=target, show_all=show_all))
             elif path == "/api/ui_state":
                 q = parse_qs(parsed.query)
                 self._json(api_ui_state(frame_name=q.get("frame", [""])[0]))

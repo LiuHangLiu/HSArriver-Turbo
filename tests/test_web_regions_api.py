@@ -53,6 +53,40 @@ class RegionsApiTests(unittest.TestCase):
         self.assertFalse(data["ok"])
         self.assertIn("截图失败啦", data["error"])
 
+    def test_calibration_target_preview_hides_cdp_regions(self):
+        preview = {"ok": True, "image": "data:image/jpeg;base64,AAA",
+                   "width": 1920, "height": 1080, "regions": [], "points": [],
+                   "checks": [], "generated_at": "2026-01-01T00:00:00"}
+        with patch.object(web_ui.screen_regions, "build_region_preview",
+                          return_value=dict(preview)) as build:
+            data = web_ui.api_regions(target="mulligan_confirm")
+
+        self.assertTrue(data["ok"])
+        self.assertEqual("mulligan_confirm",
+                         data["result"]["calibration"]["target"])
+        self.assertFalse(data["result"]["calibration"]["show_all"])
+        self.assertEqual({
+            "include_cdp": False,
+            "visible_keys": {"mulligan_confirm"},
+            "draw_probes": False,
+        }, {
+            "include_cdp": build.call_args.kwargs["include_cdp"],
+            "visible_keys": build.call_args.kwargs["visible_keys"],
+            "draw_probes": build.call_args.kwargs["draw_probes"],
+        })
+
+    def test_calibration_preview_can_show_all_non_cdp_regions(self):
+        preview = {"ok": True, "image": "data:image/jpeg;base64,AAA",
+                   "width": 1920, "height": 1080, "regions": [], "points": [],
+                   "checks": [], "generated_at": "2026-01-01T00:00:00"}
+        with patch.object(web_ui.screen_regions, "build_region_preview",
+                          return_value=dict(preview)) as build:
+            data = web_ui.api_regions(show_all=True)
+
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["result"]["calibration"]["show_all"])
+        self.assertIsNone(build.call_args.kwargs["visible_keys"])
+
     def test_api_regions_logs_a_failed_check(self):
         preview = {"ok": False, "image": "data:image/jpeg;base64,AAA",
                    "width": 1280, "height": 720, "regions": [], "points": [],

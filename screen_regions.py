@@ -319,41 +319,53 @@ def calibration_target(config=None, key: str = "") -> Optional[dict]:
     return None
 
 
-def screenshot_regions(config=None) -> list[dict]:
-    """脚本所有截图区域（区域框预览与文档共同的唯一来源）。"""
+def screenshot_regions(config=None, *, include_cdp: bool = True) -> list[dict]:
+    """脚本所有截图区域（区域框预览与文档共同的唯一来源）。
+
+    ``include_cdp=False`` 用于桌面客户端的校准预览：CDP 推荐、换牌推荐和
+    AI 胜率来自盒子回调，不应再作为屏幕 ROI 展示或校准目标。
+    """
     cfg = config if config is not None else _default_config()
-    targets = calibration_targets(cfg)
+    targets = calibration_targets(cfg, include_cdp=include_cdp)
     by_key = {target["key"]: target for target in targets}
-    win_rate, win_rate_wide = ai_win_rate_boxes(cfg)
-    return [
-        {"key": "recommendation", "color": "#63c76f",
-         "label": "盒子推荐面板（OCR 识别来源）",
-         "box": by_key["recommendation"]["box"],
-         "config_key": "recommendation_roi",
-         "note": "对战中把盒子的「打法参考A」面板拖进这个绿框，脚本就靠它读出牌建议"},
-        {"key": "mulligan_recommendation",
-         "color": MULLIGAN_RECOMMENDATION_COLOR,
-         "label": "换牌推荐面板（换牌 OCR 专用，最多4张留牌）",
-         "box": by_key["mulligan_recommendation"]["box"],
-         "config_key": "mulligan_recommendation_roi",
-         "note": "换牌阶段的留牌建议区域：比回合推荐大，能框住最多 4 条建议；"
-                 "与回合 OCR 分开截图以提速"},
+    regions = []
+    if include_cdp:
+        win_rate, win_rate_wide = ai_win_rate_boxes(cfg)
+        regions.extend([
+            {"key": "recommendation", "color": "#63c76f",
+             "label": "盒子推荐面板（OCR 识别来源）",
+             "box": by_key["recommendation"]["box"],
+             "config_key": "recommendation_roi",
+             "note": "对战中把盒子的「打法参考A」面板框进这个区域"},
+            {"key": "mulligan_recommendation",
+             "color": MULLIGAN_RECOMMENDATION_COLOR,
+             "label": "换牌推荐面板（换牌 OCR 专用，最多4张留牌）",
+             "box": by_key["mulligan_recommendation"]["box"],
+             "config_key": "mulligan_recommendation_roi",
+             "note": "换牌阶段的留牌建议区域"},
+        ])
+    regions.append(
         {"key": "mulligan_confirm", "color": "#5fa8e6",
          "label": "换牌「确认」按钮（提交校验）",
          "box": by_key["mulligan_confirm"]["box"],
          "config_key": "mulligan_confirm_roi",
-         "note": "换牌阶段用来确认按钮是否已经消失（还在=没提交成功，要重试）"},
-        {"key": "win_rate", "color": "#e2a84e",
-         "label": "盒子「AI胜率」浮动条",
-         "box": win_rate,
-         "config_key": "ai_win_rate_roi",
-         "note": "开了自动投降才用得到：靠它读左上角 AI胜率"},
-        {"key": "win_rate_wide", "color": "#e2705f",
-         "label": "AI胜率兜底区域",
-         "box": win_rate_wide,
-         # 兜底区域完全包住主区域，所以画细一点、标签放框下面，避免和上面重叠。
-         "width": 1, "label_below": True,
-         "note": "主区域读不到时放宽再读一次，偏一点也能兜住"},
+         "note": "框住换牌界面里的「确认」按钮"}
+    )
+    if include_cdp:
+        regions.extend([
+            {"key": "win_rate", "color": "#e2a84e",
+             "label": "盒子「AI胜率」浮动条",
+             "box": win_rate,
+             "config_key": "ai_win_rate_roi",
+             "note": "盒子 AI 胜率浮动条"},
+            {"key": "win_rate_wide", "color": "#e2705f",
+             "label": "AI胜率兜底区域",
+             "box": win_rate_wide,
+             # 兜底区域完全包住主区域，所以画细一点、标签放框下面，避免和上面重叠。
+             "width": 1, "label_below": True,
+             "note": "AI 胜率主区域读取失败时的兜底区域"},
+        ])
+    regions.extend([
         # 下面两个只在「对局结算」阶段使用（打完一局后的界面）：
         # 「开始」按钮与段位数字**都可校准**（段位框读用户校准值，用来读名次）。
         {"key": "post_game_start", "color": "#7fd4c1",
@@ -392,7 +404,8 @@ def screenshot_regions(config=None) -> list[dict]:
            "box": target["box"], "config_key": target["config_key"],
            "note": target["hint"]}
           for target in targets if target.get("point_key")],
-    ]
+    ])
+    return regions
 
 
 def state_probe_points() -> list[dict]:
@@ -485,7 +498,8 @@ def _expected(config) -> tuple[int, int, int]:
 # ---------------------------------------------------------------- 预览图
 def draw_region_boxes(image, config=None, scale: float = 1.0,
                       skip_labels=(), skip_keys=(), mapping=None,
-                      bounds=None, overrides=None) -> list[dict]:
+                      bounds=None, overrides=None, *, include_cdp: bool = True,
+                      visible_keys=None) -> list[dict]:
     """在 PIL 图像上画出所有截图区域框 + 标签，并回填 in_bounds / screen_box。
 
     网页里的区域框预览图与屏幕上叠加的「校准」框共用这一份绘制逻辑，
@@ -527,7 +541,11 @@ def draw_region_boxes(image, config=None, scale: float = 1.0,
     skip_labels = set(skip_labels or ())
     skip_keys = set(skip_keys or ())
     overrides = dict(overrides or {})
-    regions = screenshot_regions(config)
+    regions = screenshot_regions(config, include_cdp=include_cdp)
+    if visible_keys is not None:
+        visible_keys = {str(key) for key in visible_keys}
+        regions = [region for region in regions
+                   if region.get("key") in visible_keys]
     for region in regions:
         region["label_drawn"] = False
         left, top, right, bottom = region["box"]
@@ -630,7 +648,9 @@ def build_region_preview(config=None, grabber: Optional[Callable] = None,
                          panel_detector: Optional[Callable] = None,
                          jpeg_quality: int = 82,
                          max_width: int = 1920,
-                         mapping_provider: Optional[Callable] = None) -> dict:
+                         mapping_provider: Optional[Callable] = None,
+                         *, include_cdp: bool = True, visible_keys=None,
+                         draw_probes: bool = True) -> dict:
     """截一张整屏、画上所有截图区域框，返回可直接给前端 <img> 用的结果。
 
     返回的 checks 与「环境自检」用同一套 ok/warn/fail 结构，前端一套渲染逻辑。
@@ -732,8 +752,9 @@ def build_region_preview(config=None, grabber: Optional[Callable] = None,
     # 越界判定用**屏幕**范围（图像可能已被等比缩小，用图像尺寸会误报）。
     screen_bounds = (0, 0, max(actual_width, screen_width or actual_width),
                      max(actual_height, screen_height or actual_height))
-    regions = draw_region_boxes(image, config, scale=scale, mapping=mapping,
-                                bounds=screen_bounds)
+    regions = draw_region_boxes(
+        image, config, scale=scale, mapping=mapping, bounds=screen_bounds,
+        include_cdp=include_cdp, visible_keys=visible_keys)
     out_of_bounds = [r for r in regions if not r.get("in_bounds")]
     for region in out_of_bounds:
         screen_box = region.get("screen_box") or region["box"]
@@ -745,8 +766,9 @@ def build_region_preview(config=None, grabber: Optional[Callable] = None,
             "这个区域会被裁掉/点不到：请确认炉石窗口在屏幕内，或重新校准区域。"))
 
     # --- 状态判定点
-    probes = draw_state_probe_points(image, scale=scale, mapping=mapping,
-                                     bounds=screen_bounds)
+    probes = (draw_state_probe_points(image, scale=scale, mapping=mapping,
+                                      bounds=screen_bounds)
+              if draw_probes else [])
 
     # --- 绿框里到底有没有盒子面板（决定要不要「移动盒子 UI」）
     recommendation = next((r for r in regions if r["key"] == "recommendation"), None)

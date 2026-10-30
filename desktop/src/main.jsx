@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { NAV_ITEMS, DEFAULT_FILTERS, classifyLog, normalizeLogMessage, logSourceLabel } from './contract.mjs';
-import calibrationPreview from './assets/calibration-preview.png';
 import rankEmblem from './assets/rank-emblem-transparent.png';
 
 const DEFAULT_CONFIG = { name: '', logRoot: '', boxDir: '', cdpPort: 9222 };
@@ -145,9 +144,84 @@ function DelaysPage({ status, call }) {
 }
 function DelaySummary({ label, description, value, unit }) { return <div className="delay-summary"><b>{label}</b><small>{description}</small><span><strong>{value}</strong><em>{unit}</em></span></div>; }
 
+const CALIBRATION_TARGETS = [
+  ['mulligan_confirm', '换牌确认按钮', 'cards'],
+  ['post_game_start', '结算开始按钮', 'play'],
+  ['rank', '段位区域', 'rank'],
+  ['main_menu_battle', '主菜单区域', 'monitor'],
+  ['deck_select_title', '选择套牌标题', 'file'],
+  ['deck_grid', '卡组网格', 'file'],
+  ['mode_menu_open', '模式按钮', 'target'],
+  ['mode_wild', '狂野按钮', 'shield'],
+  ['mode_standard', '标准按钮', 'chart'],
+  ['mode_casual', '休闲按钮', 'user'],
+];
+
 function CalibrationPage({ call, notify }) {
-  const [target, setTarget] = useState('mulligan_confirm'); const [result, setResult] = useState('等待选择校准目标'); const targets = [['mulligan_confirm', '换牌确认按钮', 'cards'], ['post_game_start', '结算开始按钮', 'play'], ['rank', '段位区域', 'rank'], ['main_menu_battle', '主菜单区域', 'monitor'], ['deck_select_title', '选择套牌标题', 'file'], ['deck_grid', '卡组网格', 'file'], ['mode_menu_open', '模式按钮', 'target'], ['mode_wild', '狂野按钮', 'shield'], ['mode_standard', '标准按钮', 'chart'], ['mode_casual', '休闲按钮', 'user']]; const calibrate = async () => { const value = await call('/api/calibrate', 'POST', { target }); setResult(value?.message || value?.state_label || '已完成校准'); };
-  return <div className="page calibration-page"><PageHeader title="校准" subtitle="通过拖拽和调整区域，校准炉石传说游戏界面中各个功能区域的位置和大小。" /><div className="calibration-layout"><div className="panel target-list"><SectionTitle icon="target">校准目标</SectionTitle>{targets.map(([key, label, icon]) => <button key={key} className={`target-item ${target === key ? 'active' : ''}`} onClick={() => setTarget(key)}><Icon name={icon} size={18} /><span>{label}</span></button>)}</div><div className="panel game-preview"><SectionTitle icon="monitor" action={<button className="secondary" onClick={() => notify('已重置预览')}><Icon name="refresh" size={15} />重置预览</button>}>游戏窗口预览 <small>（拖拽蓝色框调整位置和大小）</small></SectionTitle><div className="calibration-canvas"><img className="calibration-preview-image" src={calibrationPreview} alt="炉石传说校准预览" /></div></div><div className="panel region-params"><SectionTitle icon="crosshair">当前区域参数</SectionTitle><label>区域名称<input value={targets.find(([key]) => key === target)?.[1] || target} readOnly /></label><NumberRow label="X 坐标" value="1120" /><NumberRow label="Y 坐标" value="720" /><NumberRow label="宽度" value="280" /><NumberRow label="高度" value="80" /><button className="wide-button gold" onClick={calibrate}><Icon name="crosshair" size={15} />开始校准</button><button className="wide-button green" onClick={() => notify('区域已保存')}><Icon name="save" size={15} />保存区域</button><button className="secondary wide-button" onClick={() => notify('已恢复默认区域')}><Icon name="refresh" size={15} />恢复默认</button><div className="instruction-box"><Icon name="info" size={15} /><span>操作说明<br />1. 在左侧选择要校准的区域<br />2. 拖拽预览图中的蓝色框调整位置<br />3. 或直接输入坐标和尺寸参数<br />4. 点击保存区域应用设置</span></div><p className="muted-text">{result}</p></div></div></div>;
+  const [target, setTarget] = useState('mulligan_confirm');
+  const [showAll, setShowAll] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [result, setResult] = useState('等待选择校准目标');
+  const refreshPreview = useCallback(async () => {
+    setPreviewLoading(true);
+    setPreviewError('');
+    try {
+      const query = showAll ? 'all=1' : `target=${encodeURIComponent(target)}`;
+      const value = await api().engine.request(`/api/regions?${query}`, 'GET');
+      if (value?.error) throw new Error(value.error);
+      setPreview(value?.result || null);
+    } catch (error) {
+      setPreviewError(error?.message || '校准预览加载失败');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [showAll, target]);
+  useEffect(() => { refreshPreview(); }, [refreshPreview]);
+
+  const calibrate = async () => {
+    const value = await call('/api/calibrate', 'POST', { target });
+    setResult(value?.message || value?.state_label || '校准窗口已启动');
+  };
+  const currentRegion = preview?.regions?.find((item) => item.key === target);
+  const box = Array.isArray(currentRegion?.box) ? currentRegion.box : [];
+  const width = box.length === 4 ? box[2] - box[0] : '';
+  const height = box.length === 4 ? box[3] - box[1] : '';
+  const modeText = showAll ? '校准预览：全部可校准区域' : '当前目标：仅显示选中区域';
+
+  return <div className="page calibration-page">
+    <PageHeader title="校准" subtitle="校准仅用于游戏按钮、界面识别和段位读取；CDP 推荐与 AI 胜率不在此处校准。" />
+    <div className="calibration-layout">
+      <div className="panel target-list">
+        <SectionTitle icon="target">校准目标</SectionTitle>
+        {CALIBRATION_TARGETS.map(([key, label, icon]) => <button key={key} className={`target-item ${target === key ? 'active' : ''}`} onClick={() => { setTarget(key); setShowAll(false); }}><Icon name={icon} size={18} /><span>{label}</span></button>)}
+      </div>
+      <div className="panel game-preview">
+        <SectionTitle icon="monitor" action={<button className="secondary" onClick={refreshPreview} disabled={previewLoading}><Icon name="refresh" size={15} />{previewLoading ? '读取中' : '刷新预览'}</button>}>校准预览 <small>{modeText}</small></SectionTitle>
+        <div className="preview-mode-row">
+          <button className={`preview-mode ${!showAll ? 'active' : ''}`} onClick={() => setShowAll(false)}><Icon name="crosshair" size={15} />当前区域</button>
+          <button className={`preview-mode ${showAll ? 'active' : ''}`} onClick={() => setShowAll(true)}><Icon name="target" size={15} />全部校准框</button>
+        </div>
+        <div className="calibration-canvas">
+          {preview?.image ? <img className="calibration-preview-image" src={preview.image} alt="当前炉石校准预览" /> : <div className="preview-placeholder"><Icon name="monitor" size={32} /><span>{previewError || '等待读取炉石画面'}</span></div>}
+        </div>
+        <div className="preview-note"><Icon name="info" size={14} />预览来自当前屏幕，坐标与实际炉石客户区同步；请先启动炉石并保持窗口可见。</div>
+      </div>
+      <div className="panel region-params">
+        <SectionTitle icon="crosshair">当前区域参数</SectionTitle>
+        <label>区域名称<input value={CALIBRATION_TARGETS.find(([key]) => key === target)?.[1] || target} readOnly /></label>
+        <div className="coordinate-caption">客户区坐标（只读，拖拽后刷新）</div>
+        <NumberRow label="X 坐标" value={box[0] ?? ''} />
+        <NumberRow label="Y 坐标" value={box[1] ?? ''} />
+        <NumberRow label="宽度" value={width} />
+        <NumberRow label="高度" value={height} />
+        <button className="wide-button gold" onClick={calibrate}><Icon name="crosshair" size={15} />打开校准窗口</button>
+        <div className="instruction-box"><Icon name="info" size={15} /><span>操作说明<br />1. 选择左侧目标<br />2. 打开屏幕校准窗口<br />3. 拖动蓝框中心调整位置，拖右下角调整大小<br />4. 按 S 保存全部区域，按 Esc 退出</span></div>
+        <p className="muted-text">{result}</p>
+      </div>
+    </div>
+  </div>;
 }
 
 function DiagnosticsPage({ call, status, notify, logs, config }) {

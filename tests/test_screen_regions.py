@@ -48,6 +48,24 @@ class RegionRegistryTests(unittest.TestCase):
                          boxes["mulligan_recommendation"])
         self.assertEqual((860, 810, 1060, 890), boxes["mulligan_confirm"])
 
+    def test_calibration_preview_excludes_cdp_regions(self):
+        regions = screen_regions.screenshot_regions(make_config(), include_cdp=False)
+
+        self.assertNotIn("recommendation", [region["key"] for region in regions])
+        self.assertNotIn("mulligan_recommendation",
+                         [region["key"] for region in regions])
+        self.assertNotIn("win_rate", [region["key"] for region in regions])
+        self.assertEqual("mulligan_confirm", regions[0]["key"])
+
+    def test_visible_keys_can_limit_preview_to_one_region(self):
+        image = Image.new("RGB", (1920, 1080), (18, 22, 30))
+
+        regions = screen_regions.draw_region_boxes(
+            image, make_config(), mapping=None, visible_keys={"rank"},
+            include_cdp=False)
+
+        self.assertEqual(["rank"], [region["key"] for region in regions])
+
     def test_mulligan_recommendation_default_matches_config(self):
         from config import RecommendationConfig
 
