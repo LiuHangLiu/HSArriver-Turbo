@@ -67,6 +67,25 @@ ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
+
+STARTUP_TRACE = ROOT / "engine-startup-python.log"
+
+
+def _startup_trace(message: str) -> None:
+    """记录冻结引擎启动阶段，避免启动失败时只剩一个泛化错误。"""
+    try:
+        with STARTUP_TRACE.open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"{datetime.now().isoformat(timespec='seconds')} {message}\n"
+            )
+    except Exception:
+        pass
+
+
+_startup_trace(
+    f"module_loaded frozen={getattr(sys, 'frozen', False)} root={ROOT}"
+)
+
 # 对战日志目录与运行日志路径（日志浮窗的「日志」行、「打开日志/清理日志」都用它）。
 LOG_DIR = script_logs.LOG_DIR
 RUNTIME_LOG = script_logs.RUNTIME_LOG
@@ -4438,6 +4457,7 @@ def _boot_resume_schedule():
 
 def main():
     os.chdir(ROOT)
+    _startup_trace(f"main_entered port_file={PORT_FILE}")
     # DPI 感知必须最先声明：未声明时 Windows 会把客户区几何按系统缩放虚拟化
     # （150% 下 1920×1080 报成 1280×720），而抓图是物理像素 —— 两者对不上会
     # 让所有 ROI 错位、界面识别失败。见 display_mapping 模块 docstring。
@@ -4447,28 +4467,37 @@ def main():
         dpi_aware()
     except Exception:
         pass
+    _startup_trace("after_dpi")
     # 常驻阶段监测线程：停止自动化也继续检测当前阶段（随时可恢复）
     threading.Thread(target=_stage_monitor_loop, name="hs-stage", daemon=True).start()
+    _startup_trace("after_stage_thread")
     # 「中断重启」看门狗的重启通道：把 web_ui 的重启动作注入给看门狗模块
     # （看门狗本身不认识 web_ui，靠这里接线，避免循环 import）。
     _bind_watchdog_restarter()
+    _startup_trace("after_watchdog")
     # 全局 Ctrl+Q 急停：随控制台常驻（不跟自动化的生死走），空闲/手动进对战
     # 期间也能一键叫停正在点的动作。
     _register_hotkey()
+    _startup_trace("after_hotkey")
     # 常驻前台守护线程：每 30 分钟把炉石切回最前台
     threading.Thread(
         target=_hearthstone_foreground_guard, name="hs-fg-guard", daemon=True
     ).start()
+    _startup_trace("after_foreground_thread")
     cfg = load_config()
     _apply_constants(cfg.get("name") or "", cfg.get("log_root") or "")
+    _startup_trace("after_apply_constants")
     _boot_resume_schedule()
     # 启动即自检：Python 版本 / 依赖包 / 分辨率和缩放（结果进日志与页面）。
     start_selfcheck_async()
+    _startup_trace("after_selfcheck_thread")
     # 线上最新版本号：后台线程每 6 小时查一次（断网只显示“获取失败”，不影响运行）。
     update_check.start_periodic()
+    _startup_trace("after_update_thread")
 
     server = None
     port = None
+    _startup_trace(f"before_bind host={HOST} base_port={BASE_PORT}")
     for port in range(BASE_PORT, BASE_PORT + 20):
         try:
             server = _ControlServer((HOST, port), Handler)
@@ -4478,8 +4507,11 @@ def main():
     if server is None:
         print("无法绑定端口，请检查 8765-8785 是否被占用。")
         sys.exit(1)
+    _startup_trace(f"bound_port={port}")
     threading.Thread(target=server.serve_forever, name="hs-web", daemon=True).start()
+    _startup_trace("after_server_thread")
     _write_port_file(port)
+    _startup_trace(f"after_port_file={PORT_FILE}")
 
     url = f"http://{HOST}:{port}"
     print("=" * 64)
