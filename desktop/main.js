@@ -13,6 +13,7 @@ const ENGINE_ROOT = fs.existsSync(path.join(PACKAGED_BUNDLE_ROOT, 'HSArriverTurb
     ? PACKAGED_ENGINE_ROOT
   : DEV_ROOT;
 const PORT_FILE = path.join(ENGINE_ROOT, 'log', 'ui_port.txt');
+const ENGINE_STARTUP_LOG = path.join(ENGINE_ROOT, 'engine-startup.log');
 const DEFAULT_CDP_PORT = 9222;
 
 let mainWindow;
@@ -42,6 +43,18 @@ function uiConfigPath() {
 
 function loadUiConfig() {
   return readJson(uiConfigPath(), {});
+}
+
+function appendEngineDiagnostic(label, value) {
+  try {
+    fs.appendFileSync(
+      ENGINE_STARTUP_LOG,
+      new Date().toISOString() + ' [' + label + '] ' + String(value) + '\n',
+      'utf8',
+    );
+  } catch {
+    // 诊断文件不可写时仍不能阻断引擎启动。
+  }
 }
 
 async function saveUiConfig(patch) {
@@ -86,6 +99,10 @@ function spawnEngine() {
   const command = bundled ? bundledEngine : pythonCandidates()[0];
   const args = bundled ? ['--no-browser'] : [script, '--no-browser'];
   engineError = '';
+  appendEngineDiagnostic(
+    'spawn',
+    'command=' + command + '; args=' + JSON.stringify(args) + '; cwd=' + runtimeRoot(),
+  );
   try {
     engineProcess = spawn(command, args, {
       cwd: runtimeRoot(),
@@ -94,29 +111,57 @@ function spawnEngine() {
     });
   } catch (error) {
     engineError = `${error.name}: ${error.message}`;
+    appendEngineDiagnostic('spawn-error', engineError);
     return;
   }
   engineProcess.stdout?.on('data', (data) => {
-    engineError = String(data).includes('Traceback') ? String(data).slice(-1000) : engineError;
+    const text = String(data);
+    appendEngineDiagnostic('stdout', text);
+    engineError = text.includes('Traceback') ? text.slice(-1000) : engineError;
   });
   engineProcess.stderr?.on('data', (data) => {
     engineError = String(data).slice(-2000);
+    appendEngineDiagnostic('stderr', engineError);
   });
   engineProcess.on('error', (error) => {
     engineError = `${error.name}: ${error.message}`;
+    appendEngineDiagnostic('process-error', engineError);
   });
   engineProcess.on('exit', (code, signal) => {
     if (code !== 0 && signal !== 'SIGTERM') {
       engineError = engineError || `控制引擎退出：code=${code}, signal=${signal}`;
     }
+    appendEngineDiagnostic('exit', 'code=' + code + '; signal=' + signal);
     engineProcess = undefined;
     enginePort = undefined;
   });
 }
 
+async function probeEnginePortRange() {
+  const basePort = Number.parseInt(process.env.HS_PORT || '8765', 10);
+  if (!Number.isFinite(basePort) || basePort <= 0) return 0;
+  const ports = Array.from({ length: 20 }, (_, index) => basePort + index);
+  const found = await Promise.all(ports.map(async (port) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 180);
+    try {
+      const response = await fetch('http://127.0.0.1:' + port + '/api/status', {
+        signal: controller.signal,
+      });
+      return response.ok ? port : 0;
+    } catch {
+      return 0;
+    } finally {
+      clearTimeout(timer);
+    }
+  }));
+  return found.find((port) => port > 0) || 0;
+}
+
 async function findEnginePort(timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   spawnEngine();
+  let nextProbeAt = 0;
   while (Date.now() < deadline) {
     const raw = await fsp.readFile(PORT_FILE, 'utf8').catch(() => '');
     let port = Number.parseInt(raw.trim(), 10);
@@ -131,9 +176,21 @@ async function findEnginePort(timeoutMs = 12000) {
       enginePort = port;
       return port;
     }
+    if (Date.now() >= nextProbeAt) {
+      const discovered = await probeEnginePortRange();
+      if (discovered > 0) {
+        enginePort = discovered;
+        appendEngineDiagnostic('port-probe', '发现端口 ' + discovered);
+        return discovered;
+      }
+      nextProbeAt = Date.now() + 800;
+    }
     await new Promise((resolve) => setTimeout(resolve, 120));
   }
-  throw new Error(engineError || '控制引擎未能启动，请查看日志与自检页面。');
+  const state = engineProcess
+    ? '控制引擎进程已启动（PID ' + engineProcess.pid + '），但未找到 8765-8784 的本地服务'
+    : '控制引擎进程未能保持运行';
+  throw new Error(engineError || state + '；请查看 engine-startup.log。');
 }
 
 async function engineRequest(apiPath, method = 'GET', body) {
