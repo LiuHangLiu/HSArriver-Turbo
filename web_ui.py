@@ -4109,6 +4109,10 @@ def status_snapshot():
         prepared = CTRL.prepared
     elapsed = int(time.time() - time_begin) if time_begin > 0 else 0
     win_rate = round(wins * 100.0 / games, 1) if games else 0.0
+    fsm_in_game = state in ("Choosing Card", "Battling", "Quitting Battle")
+    live_state = {**_liveness_state(), **_current_liveness()}
+    hearthstone_process = live_state.get("process")
+    hearthstone_running = hearthstone_process == "running"
     # 浮窗是否真的开着：网页用它同步「🪟 日志浮窗（开/关）」按钮文字，
     # 也能解释「为什么大按钮回到了开始运行」。
     try:
@@ -4130,7 +4134,14 @@ def status_snapshot():
         "stop_after_game": stop_after,
         "state": state,
         "state_label": STATE_LABELS.get(state, state or "待机"),
-        "in_game": state in ("Choosing Card", "Battling", "Quitting Battle"),
+        # FSM 状态可能在进程退出后暂时保留；对外状态必须以实际进程为准。
+        "in_game": bool(fsm_in_game and hearthstone_running),
+        "fsm_in_game": bool(fsm_in_game),
+        "hearthstone": {
+            "running": hearthstone_running,
+            "process": hearthstone_process or "unknown",
+            "status": live_state.get("status", "unknown"),
+        },
         "games": games,
         "wins": wins,
         "concede_count": concedes,
@@ -4144,8 +4155,8 @@ def status_snapshot():
         "surrenders": _surrender_state(),
         "rank_stop": _rank_stop_state(),
         "human_like": _current_human_like(),
-        "liveness": {**_liveness_state(), **_current_liveness()},
-        "liveness_alert": _liveness_state().get("alert"),
+        "liveness": live_state,
+        "liveness_alert": live_state.get("alert"),
         "watchdog": _watchdog_state(),
         "name_match": _name_match_state(),
         "delays": _current_delays(),

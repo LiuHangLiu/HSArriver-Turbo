@@ -475,6 +475,7 @@ class CdpRecommendationClient:
         url_contains: Iterable[str] = (),
         event_store: HsboxEventStore | None = None,
         on_event: Callable[[Any], None] | None = None,
+        on_raw: Callable[[Mapping[str, Any]], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ):
         _assert_loopback(host)
@@ -482,6 +483,7 @@ class CdpRecommendationClient:
         self.url_contains = tuple(str(item) for item in url_contains if item)
         self.event_store = event_store or HsboxEventStore()
         self.on_event = on_event
+        self.on_raw = on_raw
         self.on_error = on_error
         self._pages: dict[str, _CdpPage] = {}
         self._lock = threading.Lock()
@@ -504,8 +506,34 @@ class CdpRecommendationClient:
             return True
         return any(value in target.url for value in self.url_contains)
 
+    def _emit_raw(self, raw: Mapping[str, Any]) -> None:
+        if self.on_raw is None:
+            return
+        try:
+            self.on_raw(raw)
+        except Exception:
+            # 诊断日志不能让 CDP 监听线程掉线。
+            pass
+
     def _page_message(self, message: Mapping[str, Any], target: CdpTarget) -> None:
         if message.get("status") == "hook-installed":
+            raw = {
+                "schema": 1,
+                "kind": "status",
+                "status": "hook-installed",
+                "captured_at": datetime_utc_now(),
+                "target": {
+                    "id": target.id,
+                    "url": target.url,
+                    "title": target.title,
+                },
+                "result": message.get("result"),
+            }
+            try:
+                self.event_store.journal.append(raw)
+            except Exception:
+                pass
+            self._emit_raw(raw)
             return
         values = message.get("console_values")
         if not isinstance(values, list):
@@ -519,6 +547,7 @@ class CdpRecommendationClient:
             self._report_error(f"cdp_event_invalid:{exc}")
             return
         self.event_store.publish(event)
+        self._emit_raw(event.raw or raw)
         if self.on_event is not None:
             self.on_event(event)
 

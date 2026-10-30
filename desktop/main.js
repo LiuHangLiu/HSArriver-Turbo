@@ -251,7 +251,10 @@ function isProcessAlive(pid) {
 }
 
 function isBoxRunning() {
-  if (boxProcess && !boxProcess.killed) return true;
+  if (boxProcess) {
+    if (isProcessAlive(boxProcess.pid)) return true;
+    boxProcess = undefined;
+  }
   if (boxPid && isProcessAlive(boxPid)) return true;
   boxPid = 0;
   return false;
@@ -383,16 +386,27 @@ async function getStatus() {
     engine = { running: false, error: error.message };
   }
   const cdp = await cdpSnapshot(cdpPortFromConfig(config));
+  const hearthstone = backend.hearthstone || {
+    running: backend.liveness?.process === 'running',
+    process: backend.liveness?.process || 'unknown',
+    status: backend.liveness?.status || 'unknown',
+  };
   return {
     ...backend,
     engine,
     configFull: config,
+    hearthstone,
     box: {
       running: isBoxRunning() || cdp.connected,
       error: boxError,
       directory: config.hsbox_dir || '',
     },
-    cdp,
+    cdp: {
+      ...cdp,
+      // CDP 端口代表盒子浏览器；没有炉石进程时只算“盒子连接”，
+      // 不应在客户端显示为可用的对局推荐链路。
+      ready: Boolean(cdp.connected && hearthstone.running),
+    },
   };
 }
 

@@ -126,8 +126,10 @@ def _runtime_log(level: str, message: str) -> None:
 
 
 def _log_cdp_event(event) -> None:
-    """把 CDP 成功事件送入实时日志；完整 raw 仍由事件 journal 落盘。"""
+    """把 CDP 原始 JSON 原样送入实时日志，不混入业务前缀。"""
     raw = getattr(event, "raw", None)
+    if not raw and isinstance(event, dict):
+        raw = event
     if not raw:
         raw = {
             "schema": getattr(event, "schema", ""),
@@ -141,7 +143,7 @@ def _log_cdp_event(event) -> None:
             raw, ensure_ascii=False, separators=(",", ":"), default=str)
     except Exception:
         payload = repr(raw)
-    _runtime_log("INFO", f"[CDP] {payload}")
+    _runtime_log("INFO", payload)
 # 调试快照写盘节流：日志每次变化都全量序列化整个 log_state 会拖慢主循环，
 # 只在间隔 SNAPSHOT_WRITE_INTERVAL 秒后重新写盘。（定义于 config.py）
 _last_snapshot_write = 0.0
@@ -252,7 +254,7 @@ def initialize_recommendation_automation():
                 recommendation_config.cdp_port,
                 url_contains=recommendation_config.cdp_target_url_contains,
                 event_store=cdp_event_store,
-                on_event=_log_cdp_event,
+                on_raw=_log_cdp_event,
                 on_error=lambda message: _runtime_log(
                     "ERROR",
                     f"[CDP] {message}"),

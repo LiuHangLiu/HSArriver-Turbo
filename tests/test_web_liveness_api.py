@@ -118,6 +118,22 @@ class LivenessStateTests(unittest.TestCase):
         self.assertEqual("stale", snapshot["liveness"]["status"])
         self.assertEqual("炉石疑似无响应", snapshot["liveness_alert"])
         self.assertTrue(snapshot["liveness"]["enabled"])
+        self.assertTrue(snapshot["hearthstone"]["running"])
+
+    def test_stopped_hearthstone_clears_effective_in_game_state(self):
+        live = {"enabled": True, "status": "gone", "process": "stopped",
+                "log_age": None, "alert": "炉石已退出", "in_game": True}
+        fsm = SimpleNamespace(hearthstone_liveness_state=lambda: dict(live),
+                              stop_after_current_game=False,
+                              FSM_state="Battling", game_count=0, win_count=0,
+                              concede_count=0)
+
+        with patch.object(web_ui.CTRL, "fsm", fsm):
+            snapshot = web_ui.status_snapshot()
+
+        self.assertFalse(snapshot["in_game"])
+        self.assertFalse(snapshot["hearthstone"]["running"])
+        self.assertEqual("stopped", snapshot["hearthstone"]["process"])
 
     def test_name_match_state_falls_back_to_config(self):
         with (

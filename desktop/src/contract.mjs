@@ -30,6 +30,7 @@ export const PAGE_FEATURES = {
 
 export function classifyLog(entry = {}) {
   const text = `${entry.msg || ''} ${entry.level || ''}`.toLowerCase();
+  if (text.includes('"schema"') && text.includes('"kind"') && text.includes('"target"')) return 'cdp';
   if (text.includes('cdp') || text.includes('raw_args') || text.includes('原始 json')) return 'cdp';
   if (text.includes('power.log') || text.includes('power log')) return 'power';
   if (String(entry.level || '').toUpperCase() === 'DEBUG' || text.includes('调试')) return 'debug';

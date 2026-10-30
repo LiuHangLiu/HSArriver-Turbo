@@ -26,5 +26,6 @@ test('log classifier keeps CDP, Power.log, debug, recommendation and operation s
   assert.equal(classifyLog({ level: 'INFO', msg: 'Power.log updated' }), 'power');
   assert.equal(classifyLog({ level: 'DEBUG', msg: 'trace' }), 'debug');
   assert.equal(classifyLog({ level: 'INFO', msg: '推荐 play_minion' }), 'recommendation');
+  assert.equal(classifyLog({ level: 'INFO', msg: '{"schema":1,"kind":"status","target":{}}' }), 'cdp');
   assert.equal(classifyLog({ level: 'INFO', msg: '启动盒子' }), 'operation');
 });
