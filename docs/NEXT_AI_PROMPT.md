@@ -92,6 +92,25 @@
 
 ## 测试和构建
 
+可以生成 Windows 便携 EXE/ZIP，但必须先恢复被清理的构建依赖和 Python sidecar。`npm run build:zip` 不会自动生成 `desktop/engine-build`，它假定 sidecar 已经存在。
+
+在干净 Windows 环境首次构建时按以下顺序执行：
+
+```powershell
+cd D:\workplace\HSArriver-Turbo
+py -3.12 -m venv .venv-release312
+.\.venv-release312\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv-release312\Scripts\python.exe -m pip install pyinstaller
+.\.venv-release312\Scripts\python.exe tools/build_electron_engine.py
+
+cd desktop
+npm ci
+npm test
+npm run build:zip
+```
+
+其中 `tools/build_electron_engine.py` 使用 `desktop_engine.spec` 生成 `desktop/engine-build/HSArriverTurboEngine/HSArriverTurboEngine.exe`；Electron Builder 再把它和 Python 资源放进 `resources/engine`。最终 ZIP 位于 `desktop/dist/`，解压后运行 `HSArriver Turbo.exe`。如果机器没有 `py` 命令，使用已确认可用的 Python 3.12 解释器替换它，不要把本机绝对路径写进代码或 Git。
+
 Electron 命令必须在 `desktop/` 执行：
 
 ```powershell

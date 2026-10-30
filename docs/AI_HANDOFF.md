@@ -259,7 +259,14 @@ Electron 只通过 `desktop/main.js` 的 `ALLOWED_PATHS` 访问本地 Python 服
 在仓库根目录执行 Python 测试前，按项目环境使用可用解释器；Electron 脚本在 `desktop/` 目录执行：
 
 ```powershell
+cd D:\workplace\HSArriver-Turbo
+py -3.12 -m venv .venv-release312
+.\.venv-release312\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv-release312\Scripts\python.exe -m pip install pyinstaller
+.\.venv-release312\Scripts\python.exe tools/build_electron_engine.py
+
 cd D:\workplace\HSArriver-Turbo\desktop
+npm ci
 npm test
 npm run build:react
 npm run build:dir
