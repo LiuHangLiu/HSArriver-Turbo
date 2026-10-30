@@ -272,6 +272,8 @@ class NativeConsole(tk.Tk):
             var = tk.BooleanVar(value=self.log_model.enabled[key])
             self.vars[f"log_{key}"] = var
             ttk.Checkbutton(filter_frame, text=label, variable=var, style="Panel.TCheckbutton", command=lambda k=key, v=var: self._set_log_filter(k, v)).pack(anchor="w")
+        self.vars["log_autoscroll"] = tk.BooleanVar(value=True)
+        ttk.Checkbutton(filter_frame, text="自动滚动", variable=self.vars["log_autoscroll"], style="Panel.TCheckbutton").pack(anchor="w", pady=(4, 0))
         self.log_text = tk.Text(log_panel, width=42, height=30, bg="#10141b", fg=self.COLORS["text"], insertbackground=self.COLORS["text"], relief="flat", wrap="word", state="disabled")
         self.log_text.pack(fill="both", expand=True, pady=(4, 0))
 
@@ -362,6 +364,10 @@ class NativeConsole(tk.Tk):
         self._entry(health, "watchdog_stale", "看门狗停滞秒数", 300)
         self._entry(health, "watchdog_restarts", "窗口内最大重启次数", 3)
         ttk.Button(health, text="保存监控设置", command=self._save_health).pack(anchor="e", pady=(6, 0))
+        self.vars["liveness_status"] = tk.StringVar(value="存活状态：等待检测")
+        self.vars["watchdog_status"] = tk.StringVar(value="中断重启：等待检测")
+        ttk.Label(health, textvariable=self.vars["liveness_status"], style="Panel.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Label(health, textvariable=self.vars["watchdog_status"], style="Panel.TLabel").pack(anchor="w")
         schedule = self._panel(page, "定时任务")
         self._entry(schedule, "schedule_start", "开始时间（ISO）", "")
         self._entry(schedule, "schedule_end", "结束时间（可选）", "")
@@ -405,7 +411,10 @@ class NativeConsole(tk.Tk):
         ttk.Label(decks, textvariable=self.vars["card_search_result"], style="Panel.TLabel", wraplength=760).pack(anchor="w")
         self.surrender_json = tk.Text(decks, height=16, bg="#10141b", fg=self.COLORS["text"], insertbackground=self.COLORS["text"], relief="flat")
         self.surrender_json.pack(fill="both", expand=True, pady=6)
-        ttk.Button(decks, text="保存卡组投降规则", command=self._save_surrender).pack(anchor="e")
+        rules_buttons = ttk.Frame(decks, style="Panel.TFrame")
+        rules_buttons.pack(fill="x")
+        ttk.Button(rules_buttons, text="+ 添加空白卡组", command=self._add_surrender_deck).pack(side="left")
+        ttk.Button(rules_buttons, text="保存卡组投降规则", command=self._save_surrender).pack(side="left", padx=6)
 
     def _build_rank(self, page) -> None:
         ttk.Label(page, text="段位目标", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
@@ -478,7 +487,9 @@ class NativeConsole(tk.Tk):
         ttk.Button(panel, text="导出本次诊断包", command=self._export_feedback).pack(side="left", padx=6)
         ttk.Button(panel, text="清空显示", command=self._clear_logs).pack(side="left", padx=6)
         self.vars["selfcheck_result"] = tk.StringVar(value="尚未执行自检")
-        ttk.Label(page, textvariable=self.vars["selfcheck_result"], style="Muted.TLabel", wraplength=800).pack(anchor="w", pady=10)
+        self.selfcheck_details = tk.Text(page, height=13, bg="#10141b", fg=self.COLORS["text"], relief="flat", state="disabled", wrap="word")
+        self.selfcheck_details.pack(fill="both", expand=True, pady=8)
+        ttk.Button(page, text="收起 / 展开自检明细", command=self._toggle_selfcheck).pack(anchor="e")
         info = self._panel(page, "日志说明")
         ttk.Label(info, text="右侧日志面板支持按类别勾选显示；关闭某类显示不会停止写入本地结构化日志。", style="Panel.TLabel", wraplength=800).pack(anchor="w")
 
@@ -554,7 +565,8 @@ class NativeConsole(tk.Tk):
         line = f"[{entry.get('t', '--:--:--')}] [{entry.get('level', 'INFO')}] {entry.get('msg', '')}\n"
         self.log_text.configure(state="normal")
         self.log_text.insert("end", line)
-        self.log_text.see("end")
+        if bool(self.vars.get("log_autoscroll", tk.BooleanVar(value=True)).get()):
+            self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
     def _set_log_filter(self, key: str, variable: tk.BooleanVar) -> None:
@@ -701,6 +713,18 @@ class NativeConsole(tk.Tk):
             return
         self._run_api("api_save_surrender_rules", {"config": raw, "confirm": True})
 
+    def _add_surrender_deck(self) -> None:
+        try:
+            raw = json.loads(self.surrender_json.get("1.0", "end"))
+            if not isinstance(raw, dict):
+                raise ValueError("规则根节点必须是 JSON 对象")
+            decks = raw.setdefault("decks", [])
+            decks.append({"id": f"desktop-deck-{len(decks) + 1}", "name": "新卡组", "enabled": True, "class": "", "action": "concede", "when": {"op": "all", "children": []}})
+            self.surrender_json.delete("1.0", "end")
+            self.surrender_json.insert("1.0", json.dumps(raw, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            self._show_error("添加卡组失败", exc)
+
     def _search_card(self) -> None:
         try:
             result = self.bridge.call("api_card_search", self.vars["card_search"].get(), 8)
@@ -752,6 +776,22 @@ class NativeConsole(tk.Tk):
         if result:
             check = result.get("result") or result
             self.vars["selfcheck_result"].set(check.get("summary") or check.get("error") or str(check))
+            items = check.get("items") or []
+            lines = []
+            for item in items:
+                lines.append(f"{item.get('status', '')} {item.get('label', '')}: {item.get('detail', '')}")
+                if item.get("hint"):
+                    lines.append(f"  建议：{item['hint']}")
+            self.selfcheck_details.configure(state="normal")
+            self.selfcheck_details.delete("1.0", "end")
+            self.selfcheck_details.insert("1.0", "\n".join(lines) or "没有自检明细")
+            self.selfcheck_details.configure(state="disabled")
+
+    def _toggle_selfcheck(self) -> None:
+        if self.selfcheck_details.winfo_viewable():
+            self.selfcheck_details.pack_forget()
+        else:
+            self.selfcheck_details.pack(fill="both", expand=True, pady=8)
 
     def _export_feedback(self) -> None:
         self._run_api("api_feedback_export", {})
@@ -814,6 +854,11 @@ class NativeConsole(tk.Tk):
             self.vars["stat_win_rate"].set(f"{status.get('win_rate', 0)}%")
             self.vars["stat_state"].set(str(status.get("state_label") or "待机"))
             self.vars["rank_state"].set(f"当前段位状态：{status.get('rank_stop', {}).get('stop_reason') or '未触发'}")
+            liveness = status.get("liveness") or {}
+            alert = status.get("liveness_alert") or "正常"
+            self.vars["liveness_status"].set(f"存活状态：{alert}（Power.log 告警 {liveness.get('log_stale_warn_seconds', '-')}s / 停止 {liveness.get('log_stale_stop_seconds', '-')}s）")
+            watchdog = status.get("watchdog") or {}
+            self.vars["watchdog_status"].set(f"中断重启：{watchdog.get('status') or '待机'}（本窗口 {watchdog.get('restarts_in_window', 0)} 次）")
         if "box_dir" in self.vars:
             running = self.hsbox_process is not None and self.hsbox_process.poll() is None
             self.vars["card_box"].set("盒子状态\n运行中" if running else "盒子状态\n未启动")
