@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_FILTERS, NAV_ITEMS, PAGE_FEATURES, classifyLog } from '../src/contract.mjs';
+import { DEFAULT_FILTERS, NAV_ITEMS, PAGE_FEATURES, classifyLog, normalizeLogMessage, logSourceLabel } from '../src/contract.mjs';
 
 test('client exposes exactly the eight approved top-level menus', () => {
   assert.deepEqual(NAV_ITEMS.map((item) => item[0]), [
@@ -28,4 +28,12 @@ test('log classifier keeps CDP, Power.log, debug, recommendation and operation s
   assert.equal(classifyLog({ level: 'INFO', msg: '推荐 play_minion' }), 'recommendation');
   assert.equal(classifyLog({ level: 'INFO', msg: '{"schema":1,"kind":"status","target":{}}' }), 'cdp');
   assert.equal(classifyLog({ level: 'INFO', msg: '启动盒子' }), 'operation');
+});
+
+test('log renderer removes legacy markdown/entity wrappers without touching CDP JSON', () => {
+  assert.equal(normalizeLogMessage('**[WARN]**&#x6F;peration环境自检：未配置'), '环境自检：未配置');
+  const raw = '{"schema":1,"kind":"status","target":{"id":"x"}}';
+  assert.equal(normalizeLogMessage(raw), raw);
+  assert.equal(logSourceLabel({ level: 'WARN', msg: '环境自检：未配置' }), '操作');
+  assert.equal(logSourceLabel({ level: 'INFO', msg: raw }), 'CDP');
 });

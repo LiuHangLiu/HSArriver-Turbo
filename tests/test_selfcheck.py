@@ -84,7 +84,7 @@ class DependencyManifestTests(unittest.TestCase):
 
 
 class DependencyItemTests(unittest.TestCase):
-    def test_missing_package_fails_with_pip_hint(self):
+    def test_missing_optional_ocr_package_is_a_warning_with_cdp_hint(self):
         def importer(name):
             if name == "paddleocr":
                 raise ImportError("No module named 'paddleocr'")
@@ -95,9 +95,9 @@ class DependencyItemTests(unittest.TestCase):
                                           pins={})
         item = next(i for i in items if i["key"] == "paddleocr")
 
-        self.assertEqual(selfcheck.STATUS_FAIL, item["status"])
+        self.assertEqual(selfcheck.STATUS_WARN, item["status"])
         self.assertIn("ImportError", item["detail"])
-        self.assertIn("pip install", item["hint"])
+        self.assertIn("CDP 主链路不依赖", item["hint"])
 
     def test_version_mismatch_warns_but_still_counts_as_usable(self):
         items = selfcheck.dependency_items(importer=lambda name: object(),
@@ -116,7 +116,7 @@ class DependencyItemTests(unittest.TestCase):
                                           pins={})
         item = next(i for i in items if i["key"] == "click")
 
-        self.assertEqual(selfcheck.STATUS_FAIL, item["status"])
+        self.assertEqual(selfcheck.STATUS_WARN, item["status"])
         self.assertIn("click", item["detail"])
 
     def test_optional_dependency_is_not_required(self):
@@ -126,7 +126,7 @@ class DependencyItemTests(unittest.TestCase):
             pins={})
         item = next(i for i in items if i["key"] == "setuptools")
 
-        self.assertEqual(selfcheck.STATUS_FAIL, item["status"])
+        self.assertEqual(selfcheck.STATUS_WARN, item["status"])
         self.assertFalse(item["required"])
         self.assertIn("可选", item["hint"])
 
@@ -279,6 +279,10 @@ class RealEnvironmentTests(unittest.TestCase):
         # 取而代之的是「客户区几何」。
         self.assertLessEqual({"admin", "client", "dpi", "log-root"}, keys)
         self.assertNotIn("resolution", keys)
+
+    def test_log_root_is_optional_for_cdp_primary_mode(self):
+        item = next(i for i in self.result["items"] if i["key"] == "log-root")
+        self.assertFalse(item["required"])
 
 
 if __name__ == "__main__":

@@ -28,7 +28,33 @@ export const PAGE_FEATURES = {
   diagnostics: ['selfcheck', 'log-history', 'diagnostic-export', 'recent-errors'],
 };
 
+const LEGACY_LOG_MARKUP_RE = /^\s*(?:\*\*\[(?:TRACE|DEBUG|INFO|WARN|ERROR|SYS)\]\*\*|\[(?:TRACE|DEBUG|INFO|WARN|ERROR|SYS)\])\s*/i;
+const LEGACY_OPERATION_RE = /^\s*(?:&#x6f;|&#111;)?peration(?=[\u4e00-\u9fff])\s*/i;
+
+/**
+ * 日志正文必须作为 React 文本节点显示，不能把旧版 Markdown/HTML 包装带进来。
+ * 时间和级别由客户端列单独渲染；这里仅兼容旧包已经写入缓冲区的前缀。
+ */
+export function normalizeLogMessage(value) {
+  let text = String(value ?? '');
+  text = text.replace(LEGACY_LOG_MARKUP_RE, '');
+  return text.replace(LEGACY_OPERATION_RE, '');
+}
+
+export function logSourceLabel(entry = {}) {
+  const labels = {
+    operation: '操作',
+    recommendation: '推荐',
+    cdp: 'CDP',
+    power: 'Power.log',
+    debug: '调试',
+  };
+  return labels[classifyLog(entry)] || '操作';
+}
+
 export function classifyLog(entry = {}) {
+  const explicit = String(entry.source || entry.category || '').toLowerCase();
+  if (Object.prototype.hasOwnProperty.call({ operation: 1, recommendation: 1, cdp: 1, power: 1, debug: 1 }, explicit)) return explicit;
   const text = `${entry.msg || ''} ${entry.level || ''}`.toLowerCase();
   if (text.includes('"schema"') && text.includes('"kind"') && text.includes('"target"')) return 'cdp';
   if (text.includes('cdp') || text.includes('raw_args') || text.includes('原始 json')) return 'cdp';

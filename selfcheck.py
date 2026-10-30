@@ -59,16 +59,19 @@ DEPENDENCIES: tuple[dict, ...] = (
      "why": "截图裁剪、颜色判定、OCR 预处理"},
     {"imports": ("numpy",), "dist": ("numpy",), "why": "截图像素解析"},
     {"imports": ("PIL",), "dist": ("Pillow",), "why": "截图（ImageGrab）"},
-    {"imports": ("paddleocr",), "dist": ("paddleocr",), "why": "盒子面板文字识别"},
-    {"imports": ("paddle",), "dist": ("paddlepaddle",),
-     "why": "OCR 推理后端（只有 Python 3.12 及以下有轮子）"},
+    # CDP 是当前推荐链路；PaddleOCR 仅保留作旧环境/异常场景的备用识别，
+    # 因此便携版缺少 OCR 包或模型时不能阻断挂机启动。
+    {"imports": ("paddleocr",), "dist": ("paddleocr",), "required": False,
+     "why": "盒子面板 OCR 备用链路（CDP 推荐链路不依赖）"},
+    {"imports": ("paddle",), "dist": ("paddlepaddle",), "required": False,
+     "why": "OCR 备用推理后端（CDP 推荐链路不依赖）"},
     {"imports": ("psutil",), "dist": ("psutil",), "why": "炉石进程存活检测"},
     {"imports": ("keyboard",), "dist": ("keyboard",), "why": "Ctrl+Q 全局热键"},
     {"imports": ("pynput",), "dist": ("pynput",), "why": "鼠标移动与点击"},
     {"imports": ("requests",), "dist": ("Requests",), "why": "卡牌数据下载"},
     # click 只按发行包版本检查：仓库根目录自己的 click.py 会遮蔽 PyPI 的 click，
     # import click 找不到真正的第三方包（paddle/httpx 需要它，见 paddle_adapter）。
-    {"imports": (), "dist": ("click",), "metadata_only": True,
+    {"imports": (), "dist": ("click",), "metadata_only": True, "required": False,
      "why": "OCR 依赖链（paddle/httpx）用到的第三方 click"},
     {"imports": (), "dist": ("setuptools",), "metadata_only": True,
      "required": False, "why": "paddle 运行时用到的 pkg_resources"},
@@ -178,10 +181,10 @@ def dependency_items(importer: Callable[[str], object] = importlib.import_module
             # 只认发行包元数据（例如仓库里的 click.py 会遮蔽第三方 click）。
             if not version:
                 items.append(_item(
-                    _normalize(dists[0]), label, STATUS_FAIL,
-                    f"没装 {dists[0]}（找不到发行包元数据）",
+                    _normalize(dists[0]), label, STATUS_WARN if not required else STATUS_FAIL,
+                    f"{('便携版未提供独立发行包元数据' if getattr(sys, 'frozen', False) else '找不到发行包元数据')}：{dists[0]}",
                     ("pip install -r requirements.txt" if required else
-                     f"可选依赖，需要的话 pip install {dists[0]}"), required,
+                     f"可选备用依赖，CDP 主链路不依赖；需要 OCR/MCP 时再安装 {dists[0]}"), required,
                     purpose))
             elif (pinned := _pinned_version(dists, pins)) and str(version) != str(pinned):
                 items.append(_item(
@@ -205,9 +208,9 @@ def dependency_items(importer: Callable[[str], object] = importlib.import_module
         if failed_module is not None:
             hint = (f"pip install -r requirements.txt"
                     if required else
-                    f"可选依赖，缺了不影响出牌；需要的话 pip install {dists[0]}")
+                    f"可选备用依赖，CDP 主链路不依赖；需要时再安装 {dists[0]}")
             items.append(_item(
-                _normalize(dists[0]), label, STATUS_FAIL,
+                _normalize(dists[0]), label, STATUS_FAIL if required else STATUS_WARN,
                 f"导入 {failed_module} 失败：{type(error).__name__}: {error}",
                 hint, required, purpose))
             continue
@@ -312,29 +315,35 @@ def _ocr_model_item() -> dict:
 
 
 def _log_dir_item() -> dict:
-    """炉石日志目录 + Power.log（脚本靠它判断回合，必须有）。"""
-    purpose = "判断回合/出牌的依据（Power.log）"
+    """检查 Power.log 兜底目录；CDP 主链路不要求用户手填该目录。"""
+    purpose = "Power.log 状态兜底（CDP 推荐链路不依赖）"
     cfg = _load_ui_config()
     raw = str(cfg.get("log_root") or "").strip()
     if not raw:
-        return _item("log-root", "炉石日志目录", STATUS_FAIL, "还没填写",
-                     "在「👤 基础配置」里填 Logs 文件夹，例如 "
-                     "D:\\Battle.net\\Hearthstone\\Logs。", True, purpose)
+        try:
+            from config import HEARTHSTONE_LOG_ROOT
+            raw = str(HEARTHSTONE_LOG_ROOT or "").strip()
+        except Exception:
+            raw = ""
+    if not raw:
+        return _item("log-root", "Power.log 兜底目录", STATUS_WARN, "未配置",
+                     "CDP 推荐链路不需要手填；仅在启用 Power.log 兜底时配置 Logs 文件夹。",
+                     False, purpose)
     path = Path(raw)
     if not path.is_dir():
-        return _item("log-root", "炉石日志目录", STATUS_FAIL,
+        return _item("log-root", "Power.log 兜底目录", STATUS_WARN,
                      f"目录不存在：{raw}", "检查路径是否写错（游戏更新后可能变）。",
-                     True, purpose)
+                     False, purpose)
     try:
         from power_log import find_latest_power_log
         power_log = find_latest_power_log(path)
     except Exception:
         power_log = None
     if power_log is None:
-        return _item("log-root", "炉石日志目录", STATUS_WARN,
+        return _item("log-root", "Power.log 兜底目录", STATUS_WARN,
                      f"{raw}（暂时没有 Power.log）",
-                     "目录没问题，打一局对战后会自动生成 Power.log。", True, purpose)
-    return _item("log-root", "炉石日志目录", STATUS_OK, f"{raw}", "", True, purpose)
+                     "目录没问题，打一局对战后会自动生成 Power.log。", False, purpose)
+    return _item("log-root", "Power.log 兜底目录", STATUS_OK, f"{raw}", "", False, purpose)
 
 
 def _hearthstone_item() -> dict:
@@ -458,7 +467,7 @@ def environment_items(config=None) -> list[dict]:
         admin = _item(
             "admin", "管理员权限", STATUS_FAIL, "当前不是管理员",
             "鼠标/键盘操作会被系统拦掉（点了没反应）。"
-            "请以管理员身份运行：右键命令提示符 → 以管理员身份运行 → python web_ui.py。",
+            "请右键 HSArriverTurbo.exe，选择“以管理员身份运行”；便携版不需要安装器。",
             True, "鼠标/键盘点击能否生效的前提")
 
     expected_dpi = _expected_dpi(config)

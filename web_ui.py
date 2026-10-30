@@ -34,6 +34,7 @@ if log_overlay is not None:
 import json
 import os
 import platform
+import re
 import secrets
 import subprocess
 import sys
@@ -306,6 +307,36 @@ LOG_TRIM_KEEP_BYTES = 512 * 1024  # 只读尾部这么多字节，足够 800 行
 _log_trim_lock = threading.Lock()
 _log_trim_at = [0.0]
 
+# stdout 中的旧控制台格式带有时间和级别（例如
+# ``[15:38:30 WARN] 文本``）。Electron 右侧日志已经单独渲染时间/级别，
+# 如果不在入口处去掉，就会出现重复级别；某些旧日志查看器还会把 Markdown
+# 和 HTML 实体当成内容显示成 ``**[WARN]**`` / ``&#x6F;peration``。
+_LOG_LINE_PREFIX_RE = re.compile(
+    r"^\s*(?:\[\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+"
+    r"(?:ERROR|WARN|DEBUG|SYS|INFO)\]|"
+    r"\[(?:ERROR|WARN|DEBUG|SYS|INFO)\]|"
+    r"\*\*\[(?:ERROR|WARN|DEBUG|SYS|INFO)\]\*\*)\s*",
+    re.IGNORECASE,
+)
+_LEGACY_OPERATION_PREFIX_RE = re.compile(
+    r"^\s*(?:&#x6f;|&#111;)?peration(?=[\u4e00-\u9fff])\s*",
+    re.IGNORECASE,
+)
+
+
+def _normalize_runtime_message(msg) -> str:
+    """把日志正文规范化为纯文本，不重复显示时间/级别/旧分类标记。"""
+    text = str(msg)
+    # 旧版可能同时写入“时间级别”和 Markdown 级别包装，最多剥两层，
+    # 不做全局替换，避免误改日志正文中的正常内容。
+    for _ in range(2):
+        updated = _LOG_LINE_PREFIX_RE.sub("", text, count=1)
+        updated = _LEGACY_OPERATION_PREFIX_RE.sub("", updated, count=1)
+        if updated == text:
+            break
+        text = updated
+    return text
+
 
 def _trim_runtime_log(path, now: float) -> bool:
     """把运行日志裁到最后 LOG_TRIM_KEEP_LINES 行（原子替换，返回是否裁了）。
@@ -346,6 +377,7 @@ def _log(level: str, msg: str, *, persist: bool = True):
     适合高频的 CDP 原始事件；完整事件仍由 HsboxEventJournal 单独保留。
     """
     global _log_seq
+    message = _normalize_runtime_message(msg)
     with _log_lock:
         _log_seq += 1
         _log_buffer.append(
@@ -353,25 +385,25 @@ def _log(level: str, msg: str, *, persist: bool = True):
                 "seq": _log_seq,
                 "t": datetime.now().strftime("%H:%M:%S"),
                 "level": level,
-                "msg": str(msg),
+                "msg": message,
             }
         )
     if not persist:
         return
     # 统一推入日志浮窗（关键行），与自动化日志同通道、按时间先后。
     # 浮窗若出现异常绝不能让日志系统把主流程一起拖垮。
-    if log_overlay is not None and _overlay_key(str(msg)):
+    if log_overlay is not None and _overlay_key(message):
         try:
-            log_overlay.push(str(msg), level)
+            log_overlay.push(message, level)
         except Exception:
             pass
     # 结构化分块日志 + 出错自动截图（重试/报错时）。
-    _record_battle(level, str(msg))
+    _record_battle(level, message)
     # 同时落盘：程序关闭/异常退出后仍可离线查看（诊断不依赖人工复制）。
     try:
         path = RUNTIME_LOG
         with open(path, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [{level}] {msg}\n")
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [{level}] {message}\n")
         now = time.time()
         if now - _log_trim_at[0] >= LOG_TRIM_MIN_INTERVAL:
             _trim_runtime_log(path, now)
@@ -1065,6 +1097,20 @@ def _apply_constants(name: str, log_root: str):
         CTRL.fsm.log_state.MY_NAME = cc.YOUR_NAME
 
 
+def _effective_log_root(cfg=None) -> str:
+    """解析 Power.log 目录；客户端不要求用户再手填时优先走自动探测。"""
+    cfg = cfg if isinstance(cfg, dict) else load_config()
+    configured = str(cfg.get("log_root") or "").strip()
+    if configured:
+        return configured
+    try:
+        import config as runtime_config
+        detected = str(getattr(runtime_config, "HEARTHSTONE_LOG_ROOT", "") or "").strip()
+    except Exception:
+        detected = ""
+    return detected
+
+
 def _persist_schedule(start_dt, end_dt):
     cfg = load_config()
     cfg["schedule_start"] = start_dt.isoformat(timespec="minutes") if start_dt else None
@@ -1088,7 +1134,7 @@ def _start_automation(reset_stats: bool = True):
     """启动自动化；reset_stats=False 表示浮窗「恢复」续跑，保留已有战绩。"""
     cfg = load_config()
     name = (cfg.get("name") or "").strip()
-    log_root = (cfg.get("log_root") or "").strip()
+    log_root = _effective_log_root(cfg)
     try:
         _apply_constants(name, log_root)
         import FSM_action as fsm
@@ -1926,13 +1972,13 @@ def api_start(body: dict):
             return {"ok": False, "error": "自动化正在启动中，请稍候……"}
         cfg = load_config()
         name = (cfg.get("name") or "").strip()
-        log_root = (cfg.get("log_root") or "").strip()
+        log_root = _effective_log_root(cfg)
         if not name:
             return {"ok": False, "error": "请先填写用户 ID。"}
-        if not log_root:
-            return {"ok": False, "error": "请先填写炉石日志目录。"}
-        if not os.path.isdir(log_root):
+        if cfg.get("log_root") and not os.path.isdir(log_root):
             return {"ok": False, "error": f"日志目录不存在：{log_root}"}
+        if not log_root:
+            _log("WARN", "未自动找到 Power.log 目录，继续使用 CDP 主链路。")
         # 手动开始会取消尚未开始的定时计划
         CTRL.schedule = {"start": None, "end": None}
         # 从这一刻到 _start_automation 真正把自动化线程挂上之前，网页/浮窗要显示

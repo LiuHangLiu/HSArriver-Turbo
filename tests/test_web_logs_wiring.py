@@ -290,6 +290,16 @@ class OverlayKeyTests(unittest.TestCase):
         self.assertFalse(web_ui._overlay_key("[OCR] 图 273x347 行 0 置信 0.00"))
 
 
+class RuntimeMessageNormalizationTests(TempLogsCase):
+    def test_legacy_console_wrappers_are_removed_before_storage(self):
+        with patch.object(web_ui, "_overlay_key", return_value=False):
+            web_ui._log("WARN", "[15:38:30 WARN] **[WARN]**&#x6F;peration环境自检：未配置")
+
+        lines, _ = web_ui.take_logs_after(max(0, web_ui._log_seq - 1))
+        self.assertEqual("环境自检：未配置", lines[-1]["msg"])
+        self.assertIn("[WARN] 环境自检：未配置", self.runtime.read_text(encoding="utf-8"))
+
+
 class LogTrimTests(TempLogsCase):
     def setUp(self):
         super().setUp()
