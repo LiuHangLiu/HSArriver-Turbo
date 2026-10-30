@@ -825,23 +825,71 @@ class QtConsole(QMainWindow):
         hero = QComboBox(); hero.addItem("不限职业", "")
         for value, text in (("DRUID", "德鲁伊"), ("HUNTER", "猎人"), ("MAGE", "法师"), ("PALADIN", "圣骑士"), ("PRIEST", "牧师"), ("ROGUE", "潜行者"), ("SHAMAN", "萨满"), ("WARLOCK", "术士"), ("WARRIOR", "战士"), ("DEMONHUNTER", "恶魔猎手"), ("DEATHKNIGHT", "死亡骑士")):
             hero.addItem(text, value)
+        cond_type = QComboBox()
+        for value, text in (("opp_played", "对方打出过"), ("opp_seen", "对方出现过"), ("opp_start", "对方开局全局卡"), ("opp_in_play", "对方当前在场"), ("opp_in_grave", "对方当前在墓地"), ("self_played", "我方打出过"), ("self_seen", "我方出现过")):
+            cond_type.addItem(text, value)
+        card_name = QLineEdit(); card_name.setPlaceholderText("输入中文卡名")
+        search_result = QLabel("本地卡牌库未搜索")
+        search_result.setObjectName("pageHint")
+        search = self._button("搜索卡牌", lambda: self._search_surrender_card(card_name, search_result))
+        card_row = QHBoxLayout()
+        card_row.addWidget(card_name, 1)
+        card_row.addWidget(search)
+        group_op = QComboBox()
+        group_op.addItem("且（全部满足）", "all")
+        group_op.addItem("或（任一满足）", "any")
+        group_op.addItem("非（取反）", "not")
         cond = QPlainTextEdit()
-        cond.setPlaceholderText('{"all":[{"type":"played","side":"opponent","card":"卡牌名"}]}')
+        cond.setPlaceholderText("可直接填写多条件/嵌套规则 JSON；留空则使用上方单条件表单")
         cond.setMaximumHeight(82)
         form.addRow("卡组名称", name)
         form.addRow("职业", hero)
+        form.addRow("条件组合", group_op)
+        form.addRow("条件类型", cond_type)
+        form.addRow("卡牌", card_row)
+        form.addRow("搜索结果", search_result)
         form.addRow("条件 JSON", cond)
         remove = self._button("删除卡组", row.deleteLater, "flat")
         form.addRow("", remove)
         self.deck_list.addWidget(row)
-        self.deck_rows.append({"name": name, "hero": hero, "when": cond})
+        self.deck_rows.append({"name": name, "hero": hero, "when": cond, "type": cond_type, "card": card_name, "op": group_op})
+
+    def _search_surrender_card(self, edit: QLineEdit, result_label: QLabel) -> None:
+        query = edit.text().strip()
+        if not query:
+            result_label.setText("请输入卡名")
+            return
+        run_task(lambda: self.bridge.call("api_card_search", query, 8), lambda value: self._render_card_search(value, edit, result_label), lambda error: result_label.setText(f"搜索失败：{error}"))
+
+    def _render_card_search(self, value: Any, edit: QLineEdit, result_label: QLabel) -> None:
+        cards = value.get("cards", []) if isinstance(value, dict) else []
+        if not cards:
+            result_label.setText("没有匹配卡牌")
+            return
+        names = [str(item.get("name") or item.get("id") or "") for item in cards]
+        edit.setText(names[0])
+        result_label.setText("匹配：" + "、".join(names[:4]))
 
     def _surrender_config(self) -> dict[str, Any]:
         decks = []
         for row in self.deck_rows:
             raw = row["when"].toPlainText().strip()
             try:
-                when = json.loads(raw) if raw else {"all": []}
+                if raw:
+                    when = json.loads(raw)
+                else:
+                    type_value = row["type"].currentData()
+                    type_map = {
+                        "opp_played": {"type": "played", "side": "opponent"},
+                        "opp_seen": {"type": "revealed", "side": "opponent"},
+                        "opp_start": {"type": "start_of_game", "side": "opponent"},
+                        "opp_in_play": {"type": "in_zone", "side": "opponent", "zone": "PLAY"},
+                        "opp_in_grave": {"type": "in_zone", "side": "opponent", "zone": "GRAVEYARD"},
+                        "self_played": {"type": "played", "side": "self"},
+                        "self_seen": {"type": "revealed", "side": "self"},
+                    }
+                    leaf = {**type_map.get(type_value, type_map["opp_played"]), "card": row["card"].text().strip()}
+                    when = {row["op"].currentData(): [leaf]}
             except json.JSONDecodeError as exc:
                 raise ValueError(f"卡组「{row['name'].text()}」条件 JSON 错误：{exc}")
             decks.append({"name": row["name"].text().strip(), "class": row["hero"].currentData(), "when": when, "enabled": True, "action": "concede"})

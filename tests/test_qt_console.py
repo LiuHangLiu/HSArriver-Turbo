@@ -37,6 +37,17 @@ class QtConsoleTests(unittest.TestCase):
         self.assertEqual(value["decks"][0]["name"], "测试卡组")
         self.assertEqual(value["decks"][0]["when"]["all"][0]["card"], "测试卡")
 
+    def test_surrender_card_form_creates_leaf_without_json(self):
+        self.window._add_deck()
+        row = self.window.deck_rows[0]
+        row["name"].setText("表单卡组")
+        row["card"].setText("寒冰箭")
+        value = self.window._surrender_config()
+        leaf = value["decks"][0]["when"]["all"][0]
+        self.assertEqual(leaf["type"], "played")
+        self.assertEqual(leaf["side"], "opponent")
+        self.assertEqual(leaf["card"], "寒冰箭")
+
     def test_save_delay_payload_keeps_web_api_field_names(self):
         captured = {}
         self.window._post = lambda path, body, callback=None: captured.update(path=path, body=body)
