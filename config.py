@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# 仓库根目录 = 本文件所在目录（ui_config.json / cards.json / web/ 都在这里）。
-ROOT = Path(__file__).resolve().parent
+# 仓库根目录 = 本文件所在目录；打包后改为 exe 所在目录，保证便携包里的
+# ui_config.json、logs 与 cards.json 都落在用户解压后的目录，而不是临时目录。
+ROOT = (Path(sys.executable).resolve().parent
+        if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent)
 # 用户配置持久化文件路径（Web 控制台 / 校准工具读写，与代码默认值分层合并）。
 CONFIG_PATH = ROOT / "ui_config.json"
 
@@ -827,6 +831,60 @@ def _user_delays() -> dict:
         return {}
 
 
+def _recommendation_runtime_settings() -> dict:
+    """Read the optional recommendation transport settings.
+
+    The legacy default remains OCR.  The CDP transport is opt-in so existing
+    installations and tests keep their current behavior until the launcher
+    explicitly selects it.  Machine-specific values may be supplied either
+    in the ignored ``ui_config.json`` file or through environment variables.
+    """
+    try:
+        cfg_path = ROOT / "ui_config.json"
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        section = data.get("recommendation") or {}
+        if not isinstance(section, dict):
+            section = {}
+    except Exception:
+        section = {}
+
+    source = str(_env("HS_RECOMMENDATION_SOURCE") or
+                 section.get("source") or "ocr").strip().lower()
+    if source not in {"ocr", "cdp"}:
+        source = "ocr"
+
+    def _positive_int(value, default):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    def _positive_float(value, default):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    host = str(_env("HS_CDP_HOST") or section.get("host") or "127.0.0.1")
+    port = _positive_int(_env("HS_CDP_PORT") or section.get("port"), 9222)
+    timeout = _positive_float(
+        _env("HS_CDP_WAIT_TIMEOUT") or section.get("wait_timeout_seconds"),
+        5.0)
+    targets = section.get("target_url_contains")
+    if not isinstance(targets, (list, tuple)):
+        targets = ("hs-web-embed.lushi.163.com/client-jipaiqi",)
+    targets = tuple(str(item) for item in targets if str(item).strip())
+    return {
+        "recommendation_source": source,
+        "cdp_host": host,
+        "cdp_port": port,
+        "cdp_wait_timeout_seconds": timeout,
+        "cdp_target_url_contains": targets,
+    }
+
+
 @dataclass(frozen=True)
 class RecommendationConfig:
     """推荐自动化全局配置（所有实测调优数值集中于此，附来源说明）。
@@ -974,6 +1032,17 @@ class RecommendationConfig:
     # 到了什么图”。优先被环境变量 OCR_FRAME_DIR 覆盖。
     ocr_frame_dump_dir: str = ""
 
+    # ------------------------------------------------------------------ 推荐传输
+    # OCR remains the compatibility default.  The portable Phase-1 launcher
+    # writes ``recommendation.source = cdp`` after the local CDP check passes.
+    recommendation_source: str = "ocr"
+    cdp_host: str = "127.0.0.1"
+    cdp_port: int = 9222
+    cdp_wait_timeout_seconds: float = 5.0
+    cdp_target_url_contains: tuple[str, ...] = (
+        "hs-web-embed.lushi.163.com/client-jipaiqi",
+    )
+
     def __post_init__(self) -> None:
         # 用户可覆盖项依次应用（代码默认 < ui_config.json）：
         # 1) 校准工具写入的各区域 ROI；2) 各延时。
@@ -985,4 +1054,6 @@ class RecommendationConfig:
                 object.__setattr__(self, key, box)
         # 用户可在 ui_config.json 的 delays 段覆盖延时（默认采用上游时序）。
         for key, value in _user_delays().items():
+            object.__setattr__(self, key, value)
+        for key, value in _recommendation_runtime_settings().items():
             object.__setattr__(self, key, value)

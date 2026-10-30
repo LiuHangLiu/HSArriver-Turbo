@@ -5,6 +5,7 @@ __pycache__/
 venv/
 .venv/
 .venv-release/
+.venv-release312/
 img/
 backup.md
 test-model-cache/
@@ -18,6 +19,7 @@ tmp*/
 
 dist/
 build/
+HSArriverTurbo-Phase1.spec
 .superpowers/
 
 .reasonix/

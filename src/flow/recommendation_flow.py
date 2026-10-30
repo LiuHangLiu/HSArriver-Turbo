@@ -208,6 +208,7 @@ class RecommendationFlow:
                 proposed, adapted, current_frame,
                 fresh_state, fresh_revision)
             if verified == ResultStatus.COMPLETED:
+                self._mark_reader_consumed(proposed)
                 self.consumed.mark_consumed(key)
                 return FlowStepResult(FlowStepStatus.EXECUTED)
             if verified == ResultStatus.WAITING_RECOMMENDATION:
@@ -217,6 +218,7 @@ class RecommendationFlow:
                 # execution protection.
                 if proposed.action != ActionKind.CHOOSE_DISCOVER:
                     self.consumed.mark_consumed(key)
+                self._mark_reader_consumed(proposed)
                 self.waiting_instruction = proposed.normalized_instruction
                 self.waiting_panel_hash = current_frame.perceptual_hash
                 self.waiting_turn_number = proposed.turn_number
@@ -230,6 +232,23 @@ class RecommendationFlow:
             return FlowStepResult(
                 FlowStepStatus.RETRY,
                 f"{type(exc).__name__}:{exc}")
+
+    def _mark_reader_consumed(self, proposed):
+        """Advance optional event-backed readers after a successful action.
+
+        OCR readers do not expose this hook and keep their existing behavior.
+        CDP readers use it to move from the first action in a multi-action Box
+        callback to the next action without changing the FSM contract.
+        """
+        callback = getattr(self.reader, "mark_consumed", None)
+        if not callable(callback):
+            return
+        try:
+            callback(proposed)
+        except Exception:
+            # Consumption bookkeeping must never turn a successful click into
+            # a crash; the next CDP event will still be journaled for recovery.
+            return
 
     def _wait_for_hand_animation(self):
         """等待手牌入场动画完成，再取最新状态做校验（上游性能调优逻辑）。"""

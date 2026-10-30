@@ -21,7 +21,8 @@ class MulliganFlow:
     def __init__(self, executor, action_supplier, state_supplier,
                  action_context=None, stopped=lambda: False,
                  sleep=time.sleep, pre_action_delay=0.0,
-                 first_delay=None, retry_delay=None, confirm_ready=None):
+                 first_delay=None, retry_delay=None, confirm_ready=None,
+                 action_consumed=None):
         self.executor = executor
         self.action_supplier = action_supplier
         self.state_supplier = state_supplier
@@ -33,6 +34,10 @@ class MulliganFlow:
         # 用于“先确认面板在再执行换牌”：按钮不在场就不点击，避免面板未
         # 就绪时盲点。典型实现见 FSM_action.confirm_button_present()。
         self.confirm_ready = confirm_ready
+        # Optional event-backed readers (for example CDP) need an explicit
+        # acknowledgement after the clicks succeeded so a callback containing
+        # multiple actions can advance.  OCR readers simply leave this unset.
+        self.action_consumed = action_consumed
         # 换牌是开局固定流程，**不接「活人感」**：提交后不再随机延时/看手牌
         # （用户实测反馈：换牌后对着手牌区乱晃既不像真人也没意义）。对局内的
         # 活人感只由 RecommendationFlow 的 post_action_pause 接管。
@@ -90,6 +95,13 @@ class MulliganFlow:
                 for index in selected:
                     self.executor.replace_starting_card(index, count)
                 self.executor.commit_choose_card()
+            if self.action_consumed is not None:
+                try:
+                    self.action_consumed(action)
+                except Exception:
+                    # Consumption bookkeeping must never turn a successful
+                    # mulligan click into a failed match.
+                    pass
             return MulliganResult(MulliganStatus.CONFIRMED, selected)
         except Exception as exc:
             try:

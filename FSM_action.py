@@ -4,6 +4,7 @@ import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 import keyboard
 
@@ -21,6 +22,11 @@ from strategy import StrategyState
 import log_state as log_state_module
 from log_state import *
 from src.capture.desktop_capture import DesktopCapture
+from src.cdp.cdp_client import CdpRecommendationClient
+from src.cdp.hsbox_events import HsboxEventJournal, HsboxEventStore
+from src.cdp.recommendation_reader import (
+    CdpCapture, CdpRecommendationParser, CdpRecommendationReader,
+)
 from src.flow.mulligan_flow import MulliganFlow, MulliganStatus
 from src.flow.recommendation_flow import (
     FlowStepStatus, RecommendationFlow,
@@ -63,6 +69,8 @@ recommendation_parser = None
 recommendation_reader = None
 mulligan_reader = None
 recommendation_validator = None
+cdp_event_store = None
+cdp_client = None
 active_game_generation = -1
 mulligan_delay_generation = None
 player_turn_delay_key = None
@@ -157,6 +165,18 @@ def _automation_state_with_revision():
     return snapshot, log_state.revision
 
 
+def _stop_cdp_client():
+    """Stop the optional CDP monitor before switching transports."""
+    global cdp_client
+    if cdp_client is None:
+        return
+    try:
+        cdp_client.stop()
+    except Exception:
+        pass
+    cdp_client = None
+
+
 def initialize_recommendation_automation():
     """Rebuild per-game flows while reusing expensive OCR components.
 
@@ -169,41 +189,84 @@ def initialize_recommendation_automation():
     global recommendation_config, recommendation_capture, mulligan_capture
     global recommendation_parser, recommendation_reader
     global mulligan_reader, recommendation_validator
+    global cdp_event_store, cdp_client
 
     # 轻量：每次都重建，以便拾取校准后的最新 ROI / 尺寸配置。
     recommendation_config = RecommendationConfig()
-    recommendation_capture = DesktopCapture(recommendation_config)
-    # 换牌推荐区域比回合推荐大（兼容 4 张留牌）：独立一个 capture，避免为了
-    # 换牌把每回合的 OCR 截图一起放大。
-    mulligan_capture = DesktopCapture(
-        recommendation_config,
-        roi=getattr(recommendation_config, "mulligan_recommendation_roi",
-                    recommendation_config.recommendation_roi))
+    use_cdp = getattr(recommendation_config, "recommendation_source", "ocr") == "cdp"
 
-    if recommendation_parser is None:
-        recommendation_parser = RecommendationParser()
-
-    if recommendation_reader is None:
-        recommendation_reader = StableRecommendationReader(
-            recommendation_config, PaddleOcrAdapter(),
-            text_normalizer=recommendation_parser.normalize_action_text)
-        # 不设"打法参考A"信标：对战时该标题不在截图区域内（实测
-        # 面板直出「打出N号位…」指令文本），设信标会把正确指令清空为
-        # recommendation_not_stable 死循环。面板是否在场由 parser
-        # 严格句式（打出N号位随从/放置于我方N号位 等）唯一把关，
-        # 与换牌 reader 同一设计。
-    if mulligan_reader is None:
-        # 换牌面板只有留牌建议（无"打法参考A"标题）：不设信标，
-        # 面板是否在场由 `替换N号位卡牌` 换牌句式唯一把关。
-        # 独立 if 保证每次 initialize（含 config 已存在的后续对局）
-        # 都会为闭包绑定该变量。
-        mulligan_reader = StableRecommendationReader(
-            recommendation_config, recommendation_reader.backend,
-            text_normalizer=recommendation_parser.normalize_action_text)
+    if use_cdp:
+        if not isinstance(recommendation_reader, CdpRecommendationReader):
+            _stop_cdp_client()
+            cdp_event_store = HsboxEventStore(
+                HsboxEventJournal(
+                    Path(__file__).resolve().parent
+                    / "logs" / "hsbox_cdp_events.jsonl"))
+            cdp_client = CdpRecommendationClient(
+                recommendation_config.cdp_host,
+                recommendation_config.cdp_port,
+                url_contains=recommendation_config.cdp_target_url_contains,
+                event_store=cdp_event_store,
+                on_error=lambda message: sys_print(
+                    f"[CDP] {message}"),
+            )
+            cdp_client.start_background()
+            recommendation_reader = CdpRecommendationReader(
+                cdp_event_store,
+                wait_timeout=recommendation_config.cdp_wait_timeout_seconds,
+            )
+            recommendation_parser = CdpRecommendationParser()
+        recommendation_capture = CdpCapture(recommendation_reader)
+        mulligan_capture = recommendation_capture
+        mulligan_reader = recommendation_reader
         recommendation_validator = RecommendationValidator(
             recommendation_config)
+    else:
+        _stop_cdp_client()
+        cdp_event_store = None
+        if isinstance(recommendation_reader, CdpRecommendationReader):
+            recommendation_reader = None
+            mulligan_reader = None
+            recommendation_parser = None
+        recommendation_capture = DesktopCapture(recommendation_config)
+        # 换牌推荐区域比回合推荐大（兼容 4 张留牌）：独立一个 capture，避免为了
+        # 换牌把每回合的 OCR 截图一起放大。
+        mulligan_capture = DesktopCapture(
+            recommendation_config,
+            roi=getattr(recommendation_config, "mulligan_recommendation_roi",
+                        recommendation_config.recommendation_roi))
+
+        if recommendation_parser is None:
+            recommendation_parser = RecommendationParser()
+
+        if recommendation_reader is None:
+            recommendation_reader = StableRecommendationReader(
+                recommendation_config, PaddleOcrAdapter(),
+                text_normalizer=recommendation_parser.normalize_action_text)
+            # 不设"打法参考A"信标：对战时该标题不在截图区域内（实测
+            # 面板直出「打出N号位…」指令文本），设信标会把正确指令清空为
+            # recommendation_not_stable 死循环。面板是否在场由 parser
+            # 严格句式（打出N号位随从/放置于我方N号位 等）唯一把关，
+            # 与换牌 reader 同一设计。
+        if mulligan_reader is None:
+            # 换牌面板只有留牌建议（无"打法参考A"标题）：不设信标，
+            # 面板是否在场由 `替换N号位卡牌` 换牌句式唯一把关。
+            # 独立 if 保证每次 initialize（含 config 已存在的后续对局）
+            # 都会为闭包绑定该变量。
+            mulligan_reader = StableRecommendationReader(
+                recommendation_config, recommendation_reader.backend,
+                text_normalizer=recommendation_parser.normalize_action_text)
+            recommendation_validator = RecommendationValidator(
+                recommendation_config)
 
     def read_mulligan_action():
+        if use_cdp:
+            evidence = mulligan_reader.read(None, None)
+            action = recommendation_parser.parse(
+                evidence, log_state.game_num_turns_in_play, log_state.revision)
+            if action.action != ActionKind.MULLIGAN:
+                raise RuntimeError("recommendation_is_not_mulligan")
+            return action
         # 换牌面板是否在场，由 OCR 证据裁定：识别出的文本必须能解析出
         # `替换N号位卡牌` 换牌句式（无"打法参考A"信标的专用 reader）。
         evidence = mulligan_reader.read(
@@ -222,7 +285,8 @@ def initialize_recommendation_automation():
         # 上游时序：OCR 前的每局等待由 ChoosingCardAction 的 ready 延时负责；
         # OCR 成功后立即点击，不再叠加缓冲（mulligan_post_ocr_delay=0）。
         first_delay=recommendation_config.mulligan_post_ocr_delay_seconds,
-        retry_delay=recommendation_config.mulligan_post_ocr_delay_seconds)
+        retry_delay=recommendation_config.mulligan_post_ocr_delay_seconds,
+        action_consumed=(mulligan_reader.mark_consumed if use_cdp else None))
     # 换牌故意**不接**「活人感」：换牌是开局固定流程，提交后马上进入对局，
     # 对着手牌区随机悬停既不像真人也没意义（用户实测反馈）。活人感只挂在下面
     # 对局内的 RecommendationFlow 上。
@@ -765,7 +829,8 @@ def ChoosingCardAction():
                     # 点击确认后等界面切换，再检测“确认”按钮是否还在：
                     # 还在 → 换牌未提交成功，重新执行；消失 → 已提交。
                     time.sleep(0.5)
-                    if confirm_button_present():
+                    if (getattr(recommendation_config, "recommendation_source", "ocr") != "cdp"
+                            and confirm_button_present()):
                         confirmed_waiting = False
                         verified = False
                         _report_mulligan_diagnostic(
@@ -775,7 +840,8 @@ def ChoosingCardAction():
                 time.sleep(0.3)
                 continue
             # 每轮开头先检测“确认”按钮：在 → 执行换牌；不在 → 等 retry 再试。
-            if not confirm_button_present():
+            if (getattr(recommendation_config, "recommendation_source", "ocr") != "cdp"
+                    and not confirm_button_present()):
                 _report_mulligan_diagnostic(
                     "confirm_absent",
                     "确认按钮未检测到（面板尚未就绪或已提交），等待重试……")
