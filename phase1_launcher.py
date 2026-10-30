@@ -1,20 +1,16 @@
-"""Portable EXE entry point.
+"""Portable EXE entry point for the native Qt desktop client."""
 
-The runtime UI is the native single-window console in ``native_console``.
-This small entry point is kept stable for PyInstaller and existing shortcuts.
-"""
+from qt_console import QtConsole, main
 
 from native_console import (
-    NativeConsole,
     find_hsbox_executable,
     load_local_config,
-    main,
     save_local_config,
     start_hsbox,
 )
 
 __all__ = [
-    "NativeConsole",
+    "QtConsole",
     "find_hsbox_executable",
     "load_local_config",
     "main",

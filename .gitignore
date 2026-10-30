@@ -21,6 +21,7 @@ dist/
 build/
 HSArriverTurbo-Phase1.spec
 HSArriverTurbo-Desktop.spec
+HSArriverTurbo-Qt*.spec
 .superpowers/
 
 .reasonix/

@@ -1,9 +1,9 @@
-"""Build the portable Phase-1 launcher with PyInstaller.
+"""Build the portable Phase-1 Qt desktop launcher with PyInstaller.
 
 Usage from the repository root:
     python tools/build_phase1.py
 
-Output: ``dist/HSArriverTurbo-Phase1.zip``.  It is a portable onedir bundle;
+Output: ``dist/HSArriverTurbo-Phase1.zip``.  It is a portable Qt onedir bundle;
 there is no installer and no registry setup.
 """
 
@@ -26,7 +26,7 @@ NAME = os.environ.get("HSARRIVER_BUILD_NAME", "HSArriverTurbo-Phase1")
 def main() -> int:
     command = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-        "--onedir", "--windowed", "--name", NAME,
+        "--onedir", "--console" if os.environ.get("HSARRIVER_CONSOLE") else "--windowed", "--name", NAME,
         "--paths", str(ROOT),
         "--add-data", f"{ROOT / 'cards.json'};." if (ROOT / "cards.json").exists() else ".",
         "--add-data", f"{ROOT / 'web'};web" if (ROOT / "web").is_dir() else ".",
@@ -44,6 +44,14 @@ def main() -> int:
     package = DIST / NAME
     if not package.is_dir():
         raise RuntimeError(f"PyInstaller output missing: {package}")
+    # PyInstaller may copy Windows' system ICU DLLs next to the executable
+    # because Paddle imports them indirectly.  Qt6Core must resolve the
+    # Windows ICU pair from System32; a bundled incompatible copy makes the
+    # packaged Qt client fail before the first window is shown.
+    for filename in ("icu.dll", "icuin.dll", "icuuc.dll", "icudt78.dll"):
+        bundled = package / "_internal" / filename
+        if bundled.exists():
+            bundled.unlink()
     archive = DIST / f"{NAME}.zip"
     if archive.exists():
         archive.unlink()
