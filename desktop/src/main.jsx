@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { NAV_ITEMS, DEFAULT_FILTERS, classifyLog, normalizeLogMessage, logSourceLabel } from './contract.mjs';
+import calibrationPreview from './assets/calibration-preview.png';
 import rankEmblem from './assets/rank-emblem-transparent.png';
 
 const DEFAULT_CONFIG = { name: '', logRoot: '', boxDir: '', cdpPort: 9222 };
@@ -157,49 +158,8 @@ const CALIBRATION_TARGETS = [
   ['mode_casual', '休闲按钮', 'user'],
 ];
 
-const CALIBRATION_VISUALS = {
-  mulligan_confirm: { left: '46%', top: '72%', width: '19%', height: '9%', tone: 'blue' },
-  post_game_start: { left: '41%', top: '51%', width: '22%', height: '9%', tone: 'green' },
-  rank: { left: '83%', top: '9%', width: '13%', height: '10%', tone: 'purple' },
-  main_menu_battle: { left: '3%', top: '82%', width: '18%', height: '9%', tone: 'gold' },
-  deck_select_title: { left: '31%', top: '6%', width: '36%', height: '8%', tone: 'pink' },
-  deck_grid: { left: '22%', top: '21%', width: '56%', height: '34%', tone: 'cyan' },
-  mode_menu_open: { left: '82%', top: '27%', width: '15%', height: '9%', tone: 'red' },
-  mode_wild: { left: '82%', top: '39%', width: '15%', height: '8%', tone: 'red' },
-  mode_standard: { left: '82%', top: '50%', width: '15%', height: '8%', tone: 'red' },
-  mode_casual: { left: '82%', top: '61%', width: '15%', height: '8%', tone: 'red' },
-};
-
-function CalibrationMockBoard({ visibleKeys }) {
-  return <div className="calibration-board" aria-label="炉石校准示意画布">
-    <div className="board-surface-glow" />
-    <div className="board-topline"><span>对战界面示意</span><span>30 <i /> 30</span></div>
-    <div className="board-opponent-hand"><i /><i /><i /><i /></div>
-    <div className="board-hero board-hero-opponent"><span>对手</span><b>30</b></div>
-    <div className="board-minions board-minions-opponent"><i /><i /><i /></div>
-    <div className="board-divider" />
-    <div className="board-minions board-minions-player"><i /><i /><i /><i /></div>
-    <div className="board-hero board-hero-player"><span>我方</span><b>30</b></div>
-    <div className="board-mana"><b>8/8</b><span /><span /><span /><span /><span /></div>
-    <div className="board-hand"><i /><i /><i /><i /><i /><i /></div>
-    <div className="board-menu-button"><Icon name="gear" size={20} /></div>
-    <div className="board-end-turn">结束回合</div>
-    <div className="board-side-deck"><i /><i /><i /><i /></div>
-    <div className="board-caption">校准示意图 · 实际位置请在屏幕校准窗口中对齐</div>
-    {visibleKeys.map((key) => {
-      const item = CALIBRATION_TARGETS.find(([candidate]) => candidate === key);
-      const visual = CALIBRATION_VISUALS[key];
-      if (!item || !visual) return null;
-      return <div key={key} className={`calibration-box calibration-box-${visual.tone}`} style={{ left: visual.left, top: visual.top, width: visual.width, height: visual.height }}>
-        <span>{item[1]}</span>
-      </div>;
-    })}
-  </div>;
-}
-
 function CalibrationPage({ call, notify }) {
   const [target, setTarget] = useState('mulligan_confirm');
-  const [showAll, setShowAll] = useState(false);
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -208,8 +168,7 @@ function CalibrationPage({ call, notify }) {
     setPreviewLoading(true);
     setPreviewError('');
     try {
-      const query = showAll ? 'all=1&meta=1' : `target=${encodeURIComponent(target)}&meta=1`;
-      const value = await api().engine.request(`/api/regions?${query}`, 'GET');
+      const value = await api().engine.request('/api/regions?all=1&meta=1', 'GET');
       if (value?.error) throw new Error(value.error);
       setPreview(value?.result || null);
     } catch (error) {
@@ -217,7 +176,7 @@ function CalibrationPage({ call, notify }) {
     } finally {
       setPreviewLoading(false);
     }
-  }, [showAll, target]);
+  }, []);
   useEffect(() => { refreshPreview(); }, [refreshPreview]);
 
   const calibrate = async () => {
@@ -233,8 +192,7 @@ function CalibrationPage({ call, notify }) {
   const box = Array.isArray(currentRegion?.box) ? currentRegion.box : [];
   const width = box.length === 4 ? box[2] - box[0] : '';
   const height = box.length === 4 ? box[3] - box[1] : '';
-  const modeText = showAll ? '校准预览：全部可校准区域' : '当前目标：仅显示选中区域';
-  const visibleKeys = showAll ? CALIBRATION_TARGETS.map(([key]) => key) : [target];
+  const modeText = 'v11 示意图：全部区域；实际校准只操作当前目标';
 
   return <div className="page calibration-page">
     <PageHeader title="校准" subtitle="校准仅用于游戏按钮、界面识别和段位读取；CDP 推荐与 AI 胜率不在此处校准。" />
@@ -245,14 +203,10 @@ function CalibrationPage({ call, notify }) {
       </div>
       <div className="panel game-preview">
         <SectionTitle icon="monitor" action={<button className="secondary" onClick={refreshPreview} disabled={previewLoading}><Icon name="refresh" size={15} />{previewLoading ? '读取中' : '刷新坐标'}</button>}>校准预览 <small>{modeText}</small></SectionTitle>
-        <div className="preview-mode-row">
-          <button className={`preview-mode ${!showAll ? 'active' : ''}`} onClick={() => setShowAll(false)}><Icon name="crosshair" size={15} />当前区域</button>
-          <button className={`preview-mode ${showAll ? 'active' : ''}`} onClick={() => setShowAll(true)}><Icon name="target" size={15} />全部校准框</button>
-        </div>
         <div className="calibration-canvas">
-          <CalibrationMockBoard visibleKeys={visibleKeys} />
+          <img className="calibration-preview-image" src={calibrationPreview} alt="炉石传说校准示意图" />
         </div>
-        <div className="preview-note"><Icon name="info" size={14} />这里显示的是图1样式的用途示意，不在此画布内拖框；点击右侧按钮会启动真实屏幕校准层并最小化客户端，右侧坐标来自引擎。</div>
+        <div className="preview-note"><Icon name="info" size={14} />这里恢复为 11 版本示意图，不在此画布内拖框；点击右侧按钮会启动 14 版本真实屏幕校准层并最小化客户端，右侧坐标来自引擎。</div>
         {previewError && <div className="preview-note preview-error"><Icon name="info" size={14} />{previewError}</div>}
       </div>
       <div className="panel region-params">
