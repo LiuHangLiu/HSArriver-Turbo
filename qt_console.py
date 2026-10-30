@@ -143,6 +143,8 @@ class QtConsole(QMainWindow):
         self.widgets: dict[str, QWidget] = {}
         self.pages: dict[str, QWidget] = {}
         self.deck_rows: list[dict[str, QLineEdit]] = []
+        self.surrender_dirty = False
+        self.surrender_loaded_signature = ""
         self.thread_pool = QThreadPool.globalInstance()
 
         self._set_theme()
@@ -521,21 +523,28 @@ class QtConsole(QMainWindow):
     def _build_surrender(self) -> None:
         inner, layout = self._page("surrender", "投降规则", "按原网页的卡组识别规则工作：可编辑卡组、职业、条件，并保留高级 JSON。")
         top = QHBoxLayout()
-        top.addWidget(self._check("surrender_enabled", False))
+        enabled = self._check("surrender_enabled", False)
+        enabled.stateChanged.connect(lambda _state: setattr(self, "surrender_dirty", True))
+        top.addWidget(enabled)
         top.addStretch()
         top.addWidget(self._button("添加卡组", self._add_deck))
         top.addWidget(self._button("保存卡组识别", self._save_surrender, "warn"))
+        self.surrender_toggle = self._button("收起高级 JSON", self._toggle_surrender_json, "flat")
+        top.addWidget(self.surrender_toggle)
         layout.addLayout(top)
         self.deck_list = QVBoxLayout()
         layout.addLayout(self.deck_list)
         tabs = QTabWidget()
+        self.surrender_tabs = tabs
         self.surrender_json = QPlainTextEdit()
         self.surrender_json.setPlaceholderText("高级 JSON：表单无法表达的 turn/card_type/at_least 等字段可在这里原样编辑。")
+        self.surrender_json.textChanged.connect(lambda: setattr(self, "surrender_dirty", True))
         tabs.addTab(self.surrender_json, "高级 JSON")
         help_text = QLabel("规则树支持 且 / 或 / 非；每条叶子规则可搜索本地卡牌库。保存时后端会进行卡名校验，不通过则保留上一份配置。")
         help_text.setWordWrap(True)
         tabs.addTab(help_text, "规则说明")
         layout.addWidget(tabs, 1)
+        layout.addWidget(self._button("把高级 JSON 载入到表单", self._load_surrender_json, "flat"))
         self.surrender_state = QLabel("状态：暂无启用的卡组规则。", objectName="pageHint")
         layout.addWidget(self.surrender_state)
 
@@ -613,8 +622,11 @@ class QtConsole(QMainWindow):
         layout.addLayout(row)
         self.selfcheck_text = QPlainTextEdit()
         self.selfcheck_text.setReadOnly(True)
-        layout.addWidget(self._group("环境自检", QVBoxLayout()))
-        layout.itemAt(layout.count() - 1).widget().layout().addWidget(self.selfcheck_text)
+        self.selfcheck_box = self._group("环境自检", QVBoxLayout())
+        layout.addWidget(self.selfcheck_box)
+        self.selfcheck_box.layout().addWidget(self.selfcheck_text)
+        self.selfcheck_toggle = self._button("收起自检详情", self._toggle_selfcheck, "flat")
+        layout.addWidget(self.selfcheck_toggle)
         note = QLabel("日志分类开关在窗口右侧：操作、推荐、CDP、Power.log、调试。", objectName="pageHint")
         layout.addWidget(note)
         layout.addStretch()
@@ -829,8 +841,9 @@ class QtConsole(QMainWindow):
         for value, text in (("opp_played", "对方打出过"), ("opp_seen", "对方出现过"), ("opp_start", "对方开局全局卡"), ("opp_in_play", "对方当前在场"), ("opp_in_grave", "对方当前在墓地"), ("self_played", "我方打出过"), ("self_seen", "我方出现过")):
             cond_type.addItem(text, value)
         card_name = QLineEdit(); card_name.setPlaceholderText("输入中文卡名")
-        search_result = QLabel("本地卡牌库未搜索")
-        search_result.setObjectName("pageHint")
+        search_result = QComboBox()
+        search_result.addItem("本地卡牌库未搜索", "")
+        search_result.currentIndexChanged.connect(lambda _index, edit=card_name, combo=search_result: self._choose_surrender_card(edit, combo))
         search = self._button("搜索卡牌", lambda: self._search_surrender_card(card_name, search_result))
         card_row = QHBoxLayout()
         card_row.addWidget(card_name, 1)
@@ -852,23 +865,40 @@ class QtConsole(QMainWindow):
         remove = self._button("删除卡组", row.deleteLater, "flat")
         form.addRow("", remove)
         self.deck_list.addWidget(row)
-        self.deck_rows.append({"name": name, "hero": hero, "when": cond, "type": cond_type, "card": card_name, "op": group_op})
+        self.deck_rows.append({"name": name, "hero": hero, "when": cond, "type": cond_type, "card": card_name, "op": group_op, "search": search_result})
+        self.surrender_dirty = True
 
-    def _search_surrender_card(self, edit: QLineEdit, result_label: QLabel) -> None:
+    def _search_surrender_card(self, edit: QLineEdit, result_label: QComboBox) -> None:
         query = edit.text().strip()
         if not query:
-            result_label.setText("请输入卡名")
+            result_label.clear()
+            result_label.addItem("请输入卡名", "")
             return
-        run_task(lambda: self.bridge.call("api_card_search", query, 8), lambda value: self._render_card_search(value, edit, result_label), lambda error: result_label.setText(f"搜索失败：{error}"))
+        run_task(lambda: self.bridge.call("api_card_search", query, 8), lambda value: self._render_card_search(value, edit, result_label), lambda error: self._set_card_search_error(result_label, error))
 
-    def _render_card_search(self, value: Any, edit: QLineEdit, result_label: QLabel) -> None:
+    def _set_card_search_error(self, combo: QComboBox, error: str) -> None:
+        combo.clear()
+        combo.addItem(f"搜索失败：{error}", "")
+
+    def _render_card_search(self, value: Any, edit: QLineEdit, result_label: QComboBox) -> None:
         cards = value.get("cards", []) if isinstance(value, dict) else []
         if not cards:
-            result_label.setText("没有匹配卡牌")
+            result_label.clear()
+            result_label.addItem("没有匹配卡牌", "")
             return
-        names = [str(item.get("name") or item.get("id") or "") for item in cards]
-        edit.setText(names[0])
-        result_label.setText("匹配：" + "、".join(names[:4]))
+        result_label.blockSignals(True)
+        result_label.clear()
+        for item in cards:
+            name = str(item.get("name") or item.get("id") or "")
+            card_id = str(item.get("id") or "")
+            result_label.addItem(f"{name}  [{card_id}]" if card_id else name, name)
+        result_label.blockSignals(False)
+        self._choose_surrender_card(edit, result_label)
+
+    def _choose_surrender_card(self, edit: QLineEdit, combo: QComboBox) -> None:
+        value = combo.currentData()
+        if value:
+            edit.setText(str(value))
 
     def _surrender_config(self) -> dict[str, Any]:
         decks = []
@@ -910,7 +940,53 @@ class QtConsole(QMainWindow):
         except ValueError as exc:
             self._show_error("保存卡组识别", str(exc))
             return
-        self._post("/api/surrender_rules", {"config": config}, self._show_result)
+        def saved(result: Any) -> None:
+            if isinstance(result, dict) and result.get("ok"):
+                self.surrender_dirty = False
+                self.surrender_json.setPlainText(json.dumps(result.get("config", config), ensure_ascii=False, indent=2))
+            self._show_result(result)
+        self._post("/api/surrender_rules", {"config": config}, saved)
+
+    def _clear_surrender_form(self) -> None:
+        while self.deck_list.count():
+            item = self.deck_list.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.deck_rows.clear()
+
+    def _load_surrender_config(self, config: dict[str, Any]) -> None:
+        self._clear_surrender_form()
+        self.widgets["surrender_enabled"].setChecked(bool(config.get("enabled")))
+        self.surrender_json.blockSignals(True)
+        self.surrender_json.setPlainText(json.dumps(config, ensure_ascii=False, indent=2))
+        self.surrender_json.blockSignals(False)
+        for deck in config.get("decks", []) if isinstance(config.get("decks"), list) else []:
+            self._add_deck()
+            row = self.deck_rows[-1]
+            row["name"].setText(str(deck.get("name") or ""))
+            hero = str(deck.get("class") or "")
+            index = row["hero"].findData(hero)
+            if index >= 0:
+                row["hero"].setCurrentIndex(index)
+            row["when"].setPlainText(json.dumps(deck.get("when") or {"all": []}, ensure_ascii=False, indent=2))
+        self.surrender_dirty = False
+        self.surrender_loaded_signature = json.dumps(config, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _load_surrender_json(self) -> None:
+        try:
+            config = json.loads(self.surrender_json.toPlainText() or "{}")
+        except json.JSONDecodeError as exc:
+            self._show_error("载入投降规则", f"高级 JSON 格式错误：{exc}")
+            return
+        if not isinstance(config, dict):
+            self._show_error("载入投降规则", "高级 JSON 顶层必须是对象。")
+            return
+        self._load_surrender_config(config)
+
+    def _toggle_surrender_json(self) -> None:
+        visible = not self.surrender_tabs.isVisible()
+        self.surrender_tabs.setVisible(visible)
+        self.surrender_toggle.setText("收起高级 JSON" if visible else "展开高级 JSON")
 
     # ---------- status / logs ----------
     def _refresh_status_async(self) -> None:
@@ -946,6 +1022,10 @@ class QtConsole(QMainWindow):
         self.rank_state.setText(f"段位目标：{'已触发' if rank.get('triggered') else ('已启用' if rank.get('enabled') else '已关闭')}")
         surrender = status.get("surrenders", {})
         self.surrender_state.setText(str(surrender.get("message") or "状态：暂无启用的卡组规则。"))
+        auto_surrender = status.get("auto_surrender")
+        signature = json.dumps(auto_surrender, ensure_ascii=False, sort_keys=True, default=str) if isinstance(auto_surrender, dict) else ""
+        if isinstance(auto_surrender, dict) and not self.surrender_dirty and signature != self.surrender_loaded_signature:
+            self._load_surrender_config(auto_surrender)
         delays = status.get("delays") or {}
         delay_map = (("delay_ready", "mulligan_ready_delay_seconds"), ("delay_ocr", "mulligan_post_ocr_delay_seconds"), ("delay_retry", "mulligan_retry_delay_seconds"), ("delay_first", "first_turn_per_card_delay_seconds"), ("delay_pre", "pre_action_delay_seconds"), ("delay_post", "post_action_delay_seconds"), ("delay_draw", "draw_extra_delay_per_card_seconds"), ("delay_choice", "discover_target_delay_seconds"), ("delay_scale", "ocr_preprocess_scale"))
         for key, api_key in delay_map:
@@ -982,6 +1062,11 @@ class QtConsole(QMainWindow):
 
     def _clear_log(self) -> None:
         self.log_text.clear()
+
+    def _toggle_selfcheck(self) -> None:
+        visible = not self.selfcheck_box.isVisible()
+        self.selfcheck_box.setVisible(visible)
+        self.selfcheck_toggle.setText("收起自检详情" if visible else "展开自检详情")
 
     def _selfcheck(self) -> None:
         self._post("/api/selfcheck", {}, lambda result: self.selfcheck_text.setPlainText(json.dumps(result, ensure_ascii=False, indent=2, default=str)))

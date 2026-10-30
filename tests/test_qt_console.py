@@ -48,6 +48,18 @@ class QtConsoleTests(unittest.TestCase):
         self.assertEqual(leaf["side"], "opponent")
         self.assertEqual(leaf["card"], "寒冰箭")
 
+    def test_saved_surrender_config_round_trips_into_form(self):
+        config = {
+            "enabled": True,
+            "aliases": {},
+            "decks": [{"name": "猎人", "class": "HUNTER", "when": {"all": [{"type": "played", "side": "opponent", "card": "奥秘"}]}}],
+        }
+        self.window._load_surrender_config(config)
+        self.assertTrue(self.window.widgets["surrender_enabled"].isChecked())
+        self.assertEqual(len(self.window.deck_rows), 1)
+        self.assertEqual(self.window.deck_rows[0]["name"].text(), "猎人")
+        self.assertIn("奥秘", self.window.deck_rows[0]["when"].toPlainText())
+
     def test_save_delay_payload_keeps_web_api_field_names(self):
         captured = {}
         self.window._post = lambda path, body, callback=None: captured.update(path=path, body=body)
