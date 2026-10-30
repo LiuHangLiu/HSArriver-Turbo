@@ -1,12 +1,12 @@
 export const NAV_ITEMS = [
-  ['overview', '⌂', '概览'],
-  ['control', '▷', '挂机控制'],
-  ['surrender', '▤', '投降规则'],
-  ['rank', '▥', '段位目标'],
-  ['human', '●', '人性化'],
-  ['delays', '◷', '延迟设置'],
-  ['calibration', '⌾', '校准'],
-  ['diagnostics', '▣', '日志与自检'],
+  ['overview', 'home', '概览'],
+  ['control', 'play', '挂机控制'],
+  ['surrender', 'file', '投降规则'],
+  ['rank', 'chart', '段位目标'],
+  ['human', 'user', '人性化'],
+  ['delays', 'clock', '延迟设置'],
+  ['calibration', 'crosshair', '校准'],
+  ['diagnostics', 'clipboard', '日志与自检'],
 ];
 
 export const DEFAULT_FILTERS = {
