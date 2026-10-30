@@ -403,9 +403,9 @@ async function getStatus() {
     },
     cdp: {
       ...cdp,
-      // CDP 端口代表盒子浏览器；没有炉石进程时只算“盒子连接”，
-      // 不应在客户端显示为可用的对局推荐链路。
-      ready: Boolean(cdp.connected && hearthstone.running),
+      // CDP 端口连通即表示盒子桥接已连接；炉石进程状态单独显示，
+      // 不应让它把已经建立的 CDP 连接染成黄色。
+      ready: Boolean(cdp.connected),
     },
   };
 }

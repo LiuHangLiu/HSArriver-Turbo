@@ -370,7 +370,7 @@ def _trim_runtime_log(path, now: float) -> bool:
             return False
 
 
-def _log(level: str, msg: str, *, persist: bool = True):
+def _log(level: str, msg: str, *, persist: bool = True, source: str | None = None):
     """写入运行日志环。
 
     persist=False 只进入内存环和客户端实时日志，不写普通运行日志文件，
@@ -380,14 +380,15 @@ def _log(level: str, msg: str, *, persist: bool = True):
     message = _normalize_runtime_message(msg)
     with _log_lock:
         _log_seq += 1
-        _log_buffer.append(
-            {
-                "seq": _log_seq,
-                "t": datetime.now().strftime("%H:%M:%S"),
-                "level": level,
-                "msg": message,
-            }
-        )
+        entry = {
+            "seq": _log_seq,
+            "t": datetime.now().strftime("%H:%M:%S"),
+            "level": level,
+            "msg": message,
+        }
+        if source:
+            entry["source"] = source
+        _log_buffer.append(entry)
     if not persist:
         return
     # 统一推入日志浮窗（关键行），与自动化日志同通道、按时间先后。
@@ -482,7 +483,7 @@ def run_selfcheck(force: bool = False) -> dict:
 
 def _log_selfcheck(result: dict):
     """自检结论写进控制台日志：❌/⚠️ 逐条提示，方便照着提示修。"""
-    _log("SYS", f"环境自检：{result.get('summary', '')}")
+    _log("SYS", f"环境自检：{result.get('summary', '')}", source="operation")
     for item in result.get("items", []):
         status = item.get("status")
         if status == selfcheck.STATUS_OK:
@@ -494,7 +495,7 @@ def _log_selfcheck(result: dict):
         )
         if item.get("hint"):
             text += f" —— {item['hint']}"
-        _log(level, text)
+        _log(level, text, source="operation")
 
 
 def start_selfcheck_async():
@@ -1148,7 +1149,8 @@ def _start_automation(reset_stats: bool = True):
     # _log 的长链路；原始完整事件仍由 CDP JSONL journal 保留。
     try:
         fsm.set_runtime_log_sink(
-            lambda level, message: _log(level, message, persist=False))
+            lambda level, message: _log(
+                level, message, persist=False, source="cdp"))
     except Exception:
         pass
     # 重置运行状态；每次“打开脚本/开始对战”时战绩清零，从 0 计；

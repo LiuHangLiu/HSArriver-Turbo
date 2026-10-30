@@ -299,6 +299,25 @@ class RuntimeMessageNormalizationTests(TempLogsCase):
         self.assertEqual("环境自检：未配置", lines[-1]["msg"])
         self.assertIn("[WARN] 环境自检：未配置", self.runtime.read_text(encoding="utf-8"))
 
+    def test_log_source_is_preserved_for_client_classification(self):
+        with patch.object(web_ui, "_overlay_key", return_value=False):
+            web_ui._log(
+                "WARN",
+                "环境自检 ⚠️ CDP 主链路不依赖 Power.log",
+                persist=False,
+                source="operation",
+            )
+            web_ui._log(
+                "INFO",
+                '{"schema":1,"kind":"status","target":{"id":"x"}}',
+                persist=False,
+                source="cdp",
+            )
+
+        lines, _ = web_ui.take_logs_after(max(0, web_ui._log_seq - 2))
+        self.assertEqual("operation", lines[-2]["source"])
+        self.assertEqual("cdp", lines[-1]["source"])
+
 
 class LogTrimTests(TempLogsCase):
     def setUp(self):

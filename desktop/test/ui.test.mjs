@@ -37,3 +37,12 @@ test('log renderer removes legacy markdown/entity wrappers without touching CDP 
   assert.equal(logSourceLabel({ level: 'WARN', msg: '环境自检：未配置' }), '操作');
   assert.equal(logSourceLabel({ level: 'INFO', msg: raw }), 'CDP');
 });
+
+test('explicit log sources override incidental words in self-check messages', () => {
+  const warning = { level: 'WARN', source: 'operation', msg: '环境自检：CDP 主链路不依赖 Power.log' };
+  const hook = { level: 'INFO', source: 'cdp', msg: '{"schema":1,"kind":"status"}' };
+  assert.equal(classifyLog(warning), 'operation');
+  assert.equal(classifyLog(hook), 'cdp');
+  assert.equal(logSourceLabel(warning), '操作');
+  assert.equal(logSourceLabel(hook), 'CDP');
+});

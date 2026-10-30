@@ -56,6 +56,7 @@ export function classifyLog(entry = {}) {
   const explicit = String(entry.source || entry.category || '').toLowerCase();
   if (Object.prototype.hasOwnProperty.call({ operation: 1, recommendation: 1, cdp: 1, power: 1, debug: 1 }, explicit)) return explicit;
   const text = `${entry.msg || ''} ${entry.level || ''}`.toLowerCase();
+  if (text.includes('环境自检') || text.includes('自检')) return 'operation';
   if (text.includes('"schema"') && text.includes('"kind"') && text.includes('"target"')) return 'cdp';
   if (text.includes('cdp') || text.includes('raw_args') || text.includes('原始 json')) return 'cdp';
   if (text.includes('power.log') || text.includes('power log')) return 'power';

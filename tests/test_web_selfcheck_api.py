@@ -117,7 +117,7 @@ class SelfcheckLoggingTests(unittest.TestCase):
         logged = []
 
         with patch.object(web_ui, "_log",
-                          side_effect=lambda level, msg: logged.append((level, msg))):
+                          side_effect=lambda level, msg, **kwargs: logged.append((level, msg))):
             web_ui._log_selfcheck(result)
 
         levels = [level for level, _ in logged]
