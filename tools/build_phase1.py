@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import os
 from pathlib import Path
 import zipfile
 
@@ -19,7 +20,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
-NAME = "HSArriverTurbo-Phase1"
+NAME = os.environ.get("HSARRIVER_BUILD_NAME", "HSArriverTurbo-Phase1")
 
 
 def main() -> int:
