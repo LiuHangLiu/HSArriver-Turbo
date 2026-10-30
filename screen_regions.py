@@ -821,6 +821,99 @@ def build_region_preview(config=None, grabber: Optional[Callable] = None,
     }
 
 
+def build_region_metadata(config=None, screen_metrics: Optional[Callable] = None,
+                          mapping_provider: Optional[Callable] = None,
+                          *, include_cdp: bool = True, visible_keys=None) -> dict:
+    """只返回区域坐标和客户区状态，不抓屏。
+
+    桌面客户端的校准页使用的是示意画布，精确位置由独立的屏幕校准窗口完成，
+    因此不应为了刷新右侧坐标再把 Electron/浏览器/其它桌面内容截进来。
+    ``build_region_preview`` 继续保留给旧 Web 页面和诊断截图使用。
+    """
+    from PIL import Image
+    from display_mapping import mapping_info, tracker_stats
+
+    screen_metrics = screen_metrics or _default_screen_metrics
+    if mapping_provider is None:
+        from display_mapping import display_mapping as mapping_provider
+
+    try:
+        screen_width, screen_height, dpi = screen_metrics()
+    except Exception:
+        screen_width = screen_height = dpi = 0
+    expected_width, expected_height, expected_dpi = _expected(config)
+    screen_width = int(screen_width or expected_width)
+    screen_height = int(screen_height or expected_height)
+    try:
+        mapping = mapping_provider()
+    except Exception:
+        mapping = None
+
+    # 复用同一套区域换算逻辑，但画到内存占位图，绝不读取用户当前桌面。
+    placeholder = Image.new("RGB", (max(1, screen_width), max(1, screen_height)))
+    regions = draw_region_boxes(
+        placeholder,
+        config,
+        mapping=mapping,
+        bounds=(0, 0, screen_width, screen_height),
+        include_cdp=include_cdp,
+        visible_keys=visible_keys,
+    )
+    try:
+        tracker = tracker_stats()
+    except Exception:
+        tracker = {}
+    info = mapping_info(mapping)
+    checks = []
+    if mapping is None:
+        checks.append(_check(
+            "client", "炉石客户区", STATUS_WARN,
+            f"读不到（炉石未运行或窗口不可用）；屏幕 {screen_width}×{screen_height}",
+            "启动炉石后打开屏幕校准窗口，框会直接覆盖在游戏上。", required=False))
+    else:
+        checks.append(_check("client", "炉石客户区", STATUS_OK, info["text"]))
+        if not mapping.compatible():
+            checks.append(_check(
+                "client-aspect", "客户区比例", STATUS_FAIL,
+                f"客户区 {mapping.width}×{mapping.height} 不是 16:9",
+                "请使用全屏或接近 16:9 的客户区尺寸。"))
+        if mapping.too_small():
+            checks.append(_check(
+                "client-size", "客户区尺寸", STATUS_FAIL,
+                f"客户区 {mapping.width}×{mapping.height} 太小",
+                "请把炉石窗口调大（客户区至少 960×540）。"))
+    if tracker:
+        checks.append(_check("tracker", "窗口位置跟踪", STATUS_OK,
+                             tracker.get("text", ""), "", required=False))
+    if dpi:
+        checks.append(_check(
+            "dpi", "显示缩放（DPI）",
+            STATUS_OK if dpi == expected_dpi else STATUS_WARN,
+            f"{dpi}（{round(dpi / 96 * 100)}%）",
+            "不需要改：坐标换算按物理像素进行。" if dpi != expected_dpi else "",
+            required=False))
+    failed = [c for c in checks if c["status"] == STATUS_FAIL and c["required"]]
+    return {
+        "ok": not failed,
+        "image": None,
+        "width": screen_width,
+        "height": screen_height,
+        "scaled": False,
+        "dpi": dpi,
+        "screen": {"width": screen_width, "height": screen_height, "dpi": dpi},
+        "expected": {"width": expected_width, "height": expected_height,
+                      "dpi": expected_dpi},
+        "client": info.get("client"),
+        "mapping": info,
+        "tracker": tracker,
+        "regions": regions,
+        "points": [],
+        "checks": checks,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_ts": time.time(),
+    }
+
+
 def main() -> int:
     """命令行直接跑：python screen_regions.py [输出文件]（默认 preview.jpg）。"""
     import sys

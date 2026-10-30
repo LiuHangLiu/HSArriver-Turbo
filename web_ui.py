@@ -638,8 +638,9 @@ def api_selfcheck(force: bool = True) -> dict:
     return {"ok": True, "result": run_selfcheck(force=force)}
 
 
-def api_regions(target: str = "", show_all: bool = False) -> dict:
-    """返回校准预览截图。
+def api_regions(target: str = "", show_all: bool = False,
+                metadata_only: bool = False) -> dict:
+    """返回校准区域信息；旧 Web 调用仍可返回带框截图。
 
     默认接口保持旧行为：画出全部区域；桌面客户端传 ``target`` 时只画当前
     校准目标，传 ``show_all`` 时画全部**可校准**目标。CDP 推荐、换牌推荐和
@@ -658,7 +659,12 @@ def api_regions(target: str = "", show_all: bool = False) -> dict:
             "targets": sorted(calibration_keys),
         }
     try:
-        if legacy_all:
+        if metadata_only and not legacy_all:
+            result = screen_regions.build_region_metadata(
+                include_cdp=False,
+                visible_keys=None if show_all else {target},
+            )
+        elif legacy_all:
             result = screen_regions.build_region_preview()
         else:
             result = screen_regions.build_region_preview(
@@ -675,7 +681,7 @@ def api_regions(target: str = "", show_all: bool = False) -> dict:
     if failed:
         _log(
             "WARN",
-            "截图区域框："
+            ("校准坐标：" if metadata_only else "截图区域框：")
             + "；".join(f"{c.get('label', '')} {c.get('detail', '')}" for c in failed),
         )
     else:
@@ -684,7 +690,7 @@ def api_regions(target: str = "", show_all: bool = False) -> dict:
             client = mapping.get("client") or {}
             _log(
                 "SYS",
-                f"截图区域框：客户区 {client.get('width')}×"
+                f"{'校准坐标' if metadata_only else '截图区域框'}：客户区 {client.get('width')}×"
                 f"{client.get('height')} @屏幕"
                 f"{tuple(mapping.get('screen_origin', []))}，已标注 "
                 f"{len(result.get('regions', []))} 个区域",
@@ -692,7 +698,7 @@ def api_regions(target: str = "", show_all: bool = False) -> dict:
         else:
             _log(
                 "SYS",
-                f"截图区域框：屏幕 {result['width']}×{result['height']}"
+                f"{'校准坐标' if metadata_only else '截图区域框'}：屏幕 {result['width']}×{result['height']}"
                 f"（炉石未运行，客户区未知），已标注 "
                 f"{len(result.get('regions', []))} 个区域",
             )
@@ -4458,7 +4464,14 @@ class Handler(BaseHTTPRequestHandler):
                 show_all = q.get("all", ["0"])[0].lower() in {
                     "1", "true", "yes", "all"
                 }
-                self._json(api_regions(target=target, show_all=show_all))
+                metadata_only = q.get("meta", ["0"])[0].lower() in {
+                    "1", "true", "yes", "metadata"
+                }
+                self._json(api_regions(
+                    target=target,
+                    show_all=show_all,
+                    metadata_only=metadata_only,
+                ))
             elif path == "/api/ui_state":
                 q = parse_qs(parsed.query)
                 self._json(api_ui_state(frame_name=q.get("frame", [""])[0]))
