@@ -15,6 +15,11 @@ const ENGINE_ROOT = fs.existsSync(path.join(PACKAGED_BUNDLE_ROOT, 'HSArriverTurb
 const PORT_FILE = path.join(ENGINE_ROOT, 'log', 'ui_port.txt');
 const ENGINE_STARTUP_LOG = path.join(ENGINE_ROOT, 'engine-startup.log');
 const DEFAULT_CDP_PORT = 9222;
+const DEFAULT_CDP_TARGET_URLS = [
+  'hs-web.lushi.163.com/client-home/',
+  'hs-web.lushi.163.com/static/html/JiPai_wel.html',
+  'hs-web-embed.lushi.163.com/client-jipaiqi',
+];
 
 let mainWindow;
 let engineProcess;
@@ -325,6 +330,7 @@ async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
   const executable = resolveBoxExecutable(folder);
   const args = [
     `--remote-debugging-port=${cdpPort}`,
+    '--remote-debugging-address=127.0.0.1',
   ];
   boxError = '';
   let child;
@@ -366,6 +372,7 @@ async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
       source: 'cdp',
       host: '127.0.0.1',
       port: cdpPort,
+      target_url_contains: DEFAULT_CDP_TARGET_URLS,
     },
   });
   const cdp = await waitForCdp(cdpPort);
@@ -466,6 +473,7 @@ ipcMain.handle('runtime:save-config', async (_event, payload) => {
       source: 'cdp',
       host: '127.0.0.1',
       port: Number(payload?.cdpPort || DEFAULT_CDP_PORT),
+      target_url_contains: DEFAULT_CDP_TARGET_URLS,
     },
   };
   return saveUiConfig(patch);

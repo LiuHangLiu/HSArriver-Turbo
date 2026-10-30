@@ -144,6 +144,23 @@ def _log_cdp_event(event) -> None:
     except Exception:
         payload = repr(raw)
     _runtime_log("INFO", payload)
+
+
+def _log_cdp_error(message: str, port: int) -> None:
+    """把 CDP 连接错误保持为参考脚本使用的结构化 JSON。"""
+    payload = {
+        "schema": 1,
+        "kind": "error",
+        "error": str(message),
+        "hint": (
+            f"请用 --remote-debugging-port={int(port)} 启动 HSAng.exe，"
+            "并确认只监听 127.0.0.1"
+        ),
+    }
+    _runtime_log(
+        "ERROR",
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+    )
 # 调试快照写盘节流：日志每次变化都全量序列化整个 log_state 会拖慢主循环，
 # 只在间隔 SNAPSHOT_WRITE_INTERVAL 秒后重新写盘。（定义于 config.py）
 _last_snapshot_write = 0.0
@@ -255,9 +272,8 @@ def initialize_recommendation_automation():
                 url_contains=recommendation_config.cdp_target_url_contains,
                 event_store=cdp_event_store,
                 on_raw=_log_cdp_event,
-                on_error=lambda message: _runtime_log(
-                    "ERROR",
-                    f"[CDP] {message}"),
+                on_error=lambda message: _log_cdp_error(
+                    message, recommendation_config.cdp_port),
             )
             cdp_client.start_background()
             _runtime_log(

@@ -6,6 +6,7 @@ from src.cdp.cdp_client import (
     CdpRecommendationClient,
     CdpTarget,
 )
+from config import RecommendationConfig
 
 
 TARGET = CdpTarget(
@@ -18,6 +19,14 @@ TARGET = CdpTarget(
 
 
 class CdpRawLogTests(unittest.TestCase):
+    def test_default_targets_include_current_hsang_pages(self):
+        targets = RecommendationConfig().cdp_target_url_contains
+
+        self.assertIn("hs-web.lushi.163.com/client-home/", targets)
+        self.assertIn(
+            "hs-web.lushi.163.com/static/html/JiPai_wel.html", targets
+        )
+
     def test_hook_status_is_forwarded_as_reference_raw_json(self):
         raw_events = []
         client = CdpRecommendationClient(on_raw=raw_events.append)

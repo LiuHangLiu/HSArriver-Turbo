@@ -601,7 +601,7 @@ class NativeConsole(tk.Tk):
         cfg = load_local_config()
         cfg["hsbox_dir"] = str(self.vars["box_dir"].get()).strip()
         recommendation = dict(cfg.get("recommendation") or {})
-        recommendation.update({"source": "cdp", "host": "127.0.0.1", "port": port, "wait_timeout_seconds": 5.0, "target_url_contains": ["hs-web-embed.lushi.163.com/client-jipaiqi"]})
+        recommendation.update({"source": "cdp", "host": "127.0.0.1", "port": port, "wait_timeout_seconds": 5.0, "target_url_contains": ["hs-web.lushi.163.com/client-home/", "hs-web.lushi.163.com/static/html/JiPai_wel.html", "hs-web-embed.lushi.163.com/client-jipaiqi"]})
         cfg["recommendation"] = recommendation
         save_local_config(cfg)
         return port

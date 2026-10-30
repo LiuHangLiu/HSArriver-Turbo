@@ -294,6 +294,9 @@ def api_license_activate(body=None) -> dict:
 _log_seq = 0
 _log_buffer = deque(maxlen=LOG_BUFFER_SIZE)
 _log_lock = threading.Lock()
+_CDP_LOG_MONITOR = None
+_CDP_LOG_MONITOR_LOCK = threading.RLock()
+_CDP_LOG_LAST_ERROR = {"message": "", "at": 0.0}
 
 # 运行日志的自动裁剪：文件超过 LOG_TRIM_BYTES 就只留最后 LOG_TRIM_KEEP_LINES 行。
 # 老实现是"每次写日志都判断、超了就整文件读一遍再重写"——文件一旦涨到几十 MB，
@@ -410,6 +413,99 @@ def _log(level: str, msg: str, *, persist: bool = True, source: str | None = Non
             _trim_runtime_log(path, now)
     except Exception:
         pass
+
+
+def _cdp_raw_log(event) -> None:
+    """把常驻 CDP 监听收到的原始事件送进客户端 CDP 日志。"""
+    try:
+        payload = json.dumps(
+            event, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+    except Exception:
+        payload = repr(event)
+    _log("INFO", payload, persist=False, source="cdp")
+
+
+def _cdp_error_log(message: str, port: int) -> None:
+    """用与参考采集脚本一致的 JSON 记录 CDP 连接错误。"""
+    text = str(message)
+    now = time.monotonic()
+    with _CDP_LOG_MONITOR_LOCK:
+        previous = _CDP_LOG_LAST_ERROR
+        if previous["message"] == text and now - previous["at"] < 5.0:
+            return
+        previous.update({"message": text, "at": now})
+    payload = {
+        "schema": 1,
+        "kind": "error",
+        "error": text,
+        "hint": (
+            f"请用 --remote-debugging-port={int(port)} 启动 HSAng.exe，"
+            "并确认只监听 127.0.0.1"
+        ),
+    }
+    _log(
+        "ERROR",
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        persist=False,
+        source="cdp",
+    )
+
+
+def _stop_cdp_log_monitor() -> None:
+    """停止空闲期的 CDP 日志监听，避免和 FSM 的推荐客户端重复订阅。"""
+    global _CDP_LOG_MONITOR
+    with _CDP_LOG_MONITOR_LOCK:
+        monitor, _CDP_LOG_MONITOR = _CDP_LOG_MONITOR, None
+    if monitor is not None:
+        try:
+            monitor.stop()
+        except Exception:
+            pass
+
+
+def _start_cdp_log_monitor() -> bool:
+    """引擎常驻监听 CDP 页面，让未开始挂机时也能看到 Hook 原始 JSON。"""
+    global _CDP_LOG_MONITOR
+    try:
+        cfg = RecommendationConfig()
+        if getattr(cfg, "recommendation_source", "ocr") != "cdp":
+            return False
+        from src.cdp.cdp_client import CdpRecommendationClient
+
+        with _CDP_LOG_MONITOR_LOCK:
+            current = _CDP_LOG_MONITOR
+            current_thread = getattr(current, "_thread", None)
+            if (
+                current is not None
+                and getattr(current, "port", None) == int(cfg.cdp_port)
+                and current_thread is not None
+                and current_thread.is_alive()
+            ):
+                return True
+            if current is not None:
+                try:
+                    current.stop()
+                except Exception:
+                    pass
+            monitor = CdpRecommendationClient(
+                cfg.cdp_host,
+                cfg.cdp_port,
+                url_contains=cfg.cdp_target_url_contains,
+                on_raw=_cdp_raw_log,
+                on_error=lambda message: _cdp_error_log(message, cfg.cdp_port),
+            )
+            monitor.start_background()
+            _CDP_LOG_MONITOR = monitor
+        _log(
+            "SYS",
+            f"CDP 日志监听已启动：{cfg.cdp_host}:{cfg.cdp_port}（仅回环地址）",
+            source="operation",
+        )
+        return True
+    except Exception as exc:
+        _log("WARN", f"CDP 日志监听启动失败：{exc}", source="operation")
+        return False
 
 
 def _overlay_key(line: str) -> bool:
@@ -1145,6 +1241,7 @@ def _start_automation(reset_stats: bool = True):
         traceback.print_exc()
         return False, f"自动化组件加载失败：{exc}"
     fsm = CTRL.fsm
+    _stop_cdp_log_monitor()
     # CDP 成功事件直接进入客户端内存日志环，避免走 stdout -> TeeStream ->
     # _log 的长链路；原始完整事件仍由 CDP JSONL journal 保留。
     try:
@@ -1233,6 +1330,14 @@ def _automation_worker(fsm):
             fsm.print_info_close()
         except Exception:
             pass
+        try:
+            fsm._stop_cdp_client()
+        except Exception:
+            pass
+        try:
+            fsm.set_runtime_log_sink(None)
+        except Exception:
+            pass
         with CTRL.lock:
             summary = {
                 "games": int(fsm.game_count),
@@ -1274,6 +1379,7 @@ def _automation_worker(fsm):
                 _feedback_export_and_log(trigger="停止时自动导出")
         except Exception:
             pass
+        _start_cdp_log_monitor()
         if com_ready:
             try:
                 import pythoncom
@@ -4158,6 +4264,11 @@ def status_snapshot():
     elapsed = int(time.time() - time_begin) if time_begin > 0 else 0
     win_rate = round(wins * 100.0 / games, 1) if games else 0.0
     fsm_in_game = state in ("Choosing Card", "Battling", "Quitting Battle")
+    # Electron 首次启动时 ui_config.json 可能还没写入 source=cdp；盒子按钮
+    # 保存配置后，下一次状态轮询要把常驻 CDP 日志监听补起来。自动化启动中
+    # 不启动空闲监听，避免和 FSM 的推荐客户端重复订阅。
+    if not running and not starting:
+        _start_cdp_log_monitor()
     live_state = {**_liveness_state(), **_current_liveness()}
     hearthstone_process = live_state.get("process")
     hearthstone_running = hearthstone_process == "running"
@@ -4546,6 +4657,7 @@ def main():
     cfg = load_config()
     _apply_constants(cfg.get("name") or "", cfg.get("log_root") or "")
     _startup_trace("after_apply_constants")
+    _start_cdp_log_monitor()
     _boot_resume_schedule()
     # 启动即自检：Python 版本 / 依赖包 / 分辨率和缩放（结果进日志与页面）。
     start_selfcheck_async()

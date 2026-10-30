@@ -318,6 +318,20 @@ class RuntimeMessageNormalizationTests(TempLogsCase):
         self.assertEqual("operation", lines[-2]["source"])
         self.assertEqual("cdp", lines[-1]["source"])
 
+    def test_cdp_raw_event_enters_the_cdp_log_stream(self):
+        event = {
+            "schema": 1,
+            "kind": "status",
+            "status": "hook-installed",
+            "target": {"title": "欢迎页_记牌器_炉石盒子"},
+        }
+        with patch.object(web_ui, "_overlay_key", return_value=False):
+            web_ui._cdp_raw_log(event)
+
+        lines, _ = web_ui.take_logs_after(max(0, web_ui._log_seq - 1))
+        self.assertEqual("cdp", lines[-1]["source"])
+        self.assertIn("欢迎页_记牌器_炉石盒子", lines[-1]["msg"])
+
 
 class LogTrimTests(TempLogsCase):
     def setUp(self):

@@ -872,10 +872,21 @@ def _recommendation_runtime_settings() -> dict:
     timeout = _positive_float(
         _env("HS_CDP_WAIT_TIMEOUT") or section.get("wait_timeout_seconds"),
         5.0)
+    # HSAng 新版实际暴露的是 client-home 和 JiPai_wel 两个页面；旧版
+    # client-jipaiqi 仍保留，避免已有盒子版本失去兼容。配置里即使还留着
+    # 旧列表，也自动补上新页面，避免“9222 能连上但 CDP 日志为空”。
+    default_targets = (
+        "hs-web.lushi.163.com/client-home/",
+        "hs-web.lushi.163.com/static/html/JiPai_wel.html",
+        "hs-web-embed.lushi.163.com/client-jipaiqi",
+    )
     targets = section.get("target_url_contains")
     if not isinstance(targets, (list, tuple)):
-        targets = ("hs-web-embed.lushi.163.com/client-jipaiqi",)
-    targets = tuple(str(item) for item in targets if str(item).strip())
+        targets = default_targets
+    targets = tuple(dict.fromkeys(
+        [str(item) for item in targets if str(item).strip()]
+        + list(default_targets)
+    ))
     return {
         "recommendation_source": source,
         "cdp_host": host,
@@ -1040,6 +1051,8 @@ class RecommendationConfig:
     cdp_port: int = 9222
     cdp_wait_timeout_seconds: float = 5.0
     cdp_target_url_contains: tuple[str, ...] = (
+        "hs-web.lushi.163.com/client-home/",
+        "hs-web.lushi.163.com/static/html/JiPai_wel.html",
         "hs-web-embed.lushi.163.com/client-jipaiqi",
     )
 
