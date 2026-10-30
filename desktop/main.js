@@ -243,16 +243,28 @@ async function startBoxThroughShell(executable, args) {
   });
 }
 
+async function waitForCdp(port, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const snapshot = await cdpSnapshot(port);
+    if (snapshot.connected) return snapshot;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return cdpSnapshot(port);
+}
+
 async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
   const cdpPort = Number(port) || DEFAULT_CDP_PORT;
-  if (isBoxRunning()) return { ok: true, running: true, reused: true };
-  if ((await cdpSnapshot(cdpPort)).connected) {
+  const existingCdp = await cdpSnapshot(cdpPort);
+  if (existingCdp.connected) {
     return { ok: true, running: true, reused: true, cdp: true };
+  }
+  if (isBoxRunning()) {
+    throw new Error(`盒子已运行但 CDP 端口 ${cdpPort} 未开放，请完全退出盒子后重新启动。`);
   }
   const executable = resolveBoxExecutable(folder);
   const args = [
     `--remote-debugging-port=${cdpPort}`,
-    '--remote-debugging-address=127.0.0.1',
   ];
   boxError = '';
   let child;
@@ -296,6 +308,10 @@ async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
       port: cdpPort,
     },
   });
+  const cdp = await waitForCdp(cdpPort);
+  if (!cdp.connected) {
+    throw new Error(`盒子已启动，但 CDP 端口 ${cdpPort} 未开放，请确认盒子已完全退出后重试。`);
+  }
   return { ok: true, running: true, executable, config };
 }
 
