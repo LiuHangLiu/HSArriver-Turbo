@@ -59,7 +59,14 @@ import update_check
 import battle_record
 import feedback
 
-ROOT = Path(__file__).resolve().parent
+# 源码运行时使用仓库根目录；PyInstaller 冻结后必须使用 sidecar EXE 目录，
+# 否则 ui_config.json、logs 和 ui_port.txt 会写入临时 _MEIPASS，Electron
+# 主进程无法稳定发现端口，用户重启后配置也会丢失。
+ROOT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 # 对战日志目录与运行日志路径（日志浮窗的「日志」行、「打开日志/清理日志」都用它）。
 LOG_DIR = script_logs.LOG_DIR
 RUNTIME_LOG = script_logs.RUNTIME_LOG
@@ -206,6 +213,61 @@ def save_config(cfg: dict):
         )
     except Exception as exc:
         _log("WARN", f"配置保存失败：{exc}")
+
+
+# ---------------------------------------------------------------- 授权桥接
+# Electron 客户端通过本地 HTTP 代理调用授权逻辑；授权协议仍完全复用
+# src/license/client.py 与 hongguo 服务，不在前端保存私钥或直接访问公网。
+_LICENSE_CLIENT = None
+
+
+def _license_client():
+    global _LICENSE_CLIENT
+    if _LICENSE_CLIENT is None:
+        from src.license.client import LicenseClient
+
+        base = os.environ.get("LOCALAPPDATA") or str(ROOT / "log")
+        data_dir = Path(base) / "HSArriverTurbo" / "license"
+        _LICENSE_CLIENT = LicenseClient(
+            data_dir=data_dir,
+            app_version=version.VERSION,
+        )
+    return _LICENSE_CLIENT
+
+
+def _license_payload(state) -> dict:
+    return {
+        "ok": True,
+        "usable": bool(state.usable),
+        "plan": state.plan,
+        "permanent": bool(state.permanent),
+        "entitlement_expires_at": state.entitlement_expires_at,
+        "lease_expires_at": state.lease_expires_at,
+        "server_time": state.server_time,
+        "revision": state.revision,
+        "fingerprint": str(_license_client().device.get("fingerprint", ""))[:12],
+    }
+
+
+def api_license_status() -> dict:
+    try:
+        return _license_payload(_license_client().status())
+    except Exception as exc:
+        return {"ok": False, "usable": False, "error": str(exc)}
+
+
+def api_license_activate(body=None) -> dict:
+    body = body or {}
+    code = str(body.get("card_code") or body.get("cardCode") or "").strip()
+    if not code:
+        return {"ok": False, "usable": False, "error": "必须输入卡密；试用也使用卡密激活。"}
+    try:
+        state = _license_client().activate(code)
+        payload = _license_payload(state)
+        payload["message"] = "卡密激活成功。"
+        return payload
+    except Exception as exc:
+        return {"ok": False, "usable": False, "error": str(exc)}
 
 
 # ---------------------------------------------------------------- 运行日志缓冲
@@ -4115,6 +4177,10 @@ class Handler(BaseHTTPRequestHandler):
                 # 轻量接口：只回版本，网页顶栏/外部脚本想知道"跑的是哪一版"时
                 # 不必把整份 status 拉下来。
                 self._json(version.version_info())
+            elif path == "/api/config":
+                self._json({"ok": True, "config": load_config()})
+            elif path == "/api/license/status":
+                self._json(api_license_status())
             elif path == "/api/logs":
                 q = parse_qs(parsed.query)
                 try:
@@ -4161,6 +4227,8 @@ class Handler(BaseHTTPRequestHandler):
             path = parsed.path
             if path == "/api/config":
                 self._json(api_save_config(body))
+            elif path == "/api/license/activate":
+                self._json(api_license_activate(body))
             elif path == "/api/start":
                 self._json(api_start(body))
             elif path == "/api/prepare":
