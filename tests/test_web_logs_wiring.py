@@ -332,6 +332,21 @@ class RuntimeMessageNormalizationTests(TempLogsCase):
         self.assertEqual("cdp", lines[-1]["source"])
         self.assertIn("欢迎页_记牌器_炉石盒子", lines[-1]["msg"])
 
+    def test_cdp_error_has_readable_hint_and_structured_json(self):
+        start_seq = web_ui._log_seq
+        error = f"test_cdp_refused_{uuid.uuid4().hex}"
+        with patch.object(web_ui, "_overlay_key", return_value=False):
+            web_ui._cdp_error_log(error, 9222)
+
+        lines, _ = web_ui.take_logs_after(start_seq)
+        cdp_lines = [line for line in lines if line["source"] == "cdp"]
+        self.assertEqual(2, len(cdp_lines))
+        self.assertIn("未监听到 CDP 日志：未启动 HSAng.exe", cdp_lines[0]["msg"])
+        self.assertIn("--remote-debugging-port=9222", cdp_lines[0]["msg"])
+        self.assertIn('"schema":1', cdp_lines[1]["msg"])
+        self.assertIn('"kind":"error"', cdp_lines[1]["msg"])
+        self.assertIn(error, cdp_lines[1]["msg"])
+
 
 class LogTrimTests(TempLogsCase):
     def setUp(self):

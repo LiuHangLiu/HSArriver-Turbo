@@ -427,7 +427,7 @@ def _cdp_raw_log(event) -> None:
 
 
 def _cdp_error_log(message: str, port: int) -> None:
-    """用与参考采集脚本一致的 JSON 记录 CDP 连接错误。"""
+    """同时记录可读提示和参考采集脚本风格的结构化 CDP 错误。"""
     text = str(message)
     now = time.monotonic()
     with _CDP_LOG_MONITOR_LOCK:
@@ -435,6 +435,15 @@ def _cdp_error_log(message: str, port: int) -> None:
         if previous["message"] == text and now - previous["at"] < 5.0:
             return
         previous.update({"message": text, "at": now})
+    _log(
+        "WARN",
+        (
+            "未监听到 CDP 日志：未启动 HSAng.exe，请确认已启动 "
+            f"（--remote-debugging-port={int(port)}），并确认只监听 127.0.0.1。"
+        ),
+        persist=False,
+        source="cdp",
+    )
     payload = {
         "schema": 1,
         "kind": "error",
