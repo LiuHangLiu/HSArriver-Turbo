@@ -186,7 +186,7 @@ async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
   if (boxProcess && !boxProcess.killed) return { ok: true, running: true, reused: true };
   const executable = resolveBoxExecutable(folder);
   boxError = '';
-  boxProcess = spawn(executable, [
+  const child = spawn(executable, [
     `--remote-debugging-port=${Number(port)}`,
     '--remote-debugging-address=127.0.0.1',
   ], {
@@ -194,8 +194,19 @@ async function startBox({ folder, port = DEFAULT_CDP_PORT }) {
     windowsHide: false,
     stdio: 'ignore',
   });
-  boxProcess.on('error', (error) => { boxError = `${error.name}: ${error.message}`; });
-  boxProcess.on('exit', (code) => {
+  boxProcess = child;
+  try {
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+  } catch (error) {
+    boxError = `${error.name}: ${error.message}`;
+    boxProcess = undefined;
+    throw error;
+  }
+  child.on('error', (error) => { boxError = `${error.name}: ${error.message}`; });
+  child.on('exit', (code) => {
     if (code && code !== 0) boxError = `盒子进程退出：${code}`;
     boxProcess = undefined;
   });

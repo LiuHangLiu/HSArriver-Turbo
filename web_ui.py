@@ -1405,12 +1405,14 @@ def _apply_delays_live(changes: dict) -> dict:
 
 
 def api_save_config(body: dict):
+    name_supplied = "name" in body
+    log_root_supplied = "log_root" in body
     name = str(body.get("name") or "").strip()
     log_root = str(body.get("log_root") or "").strip()
     warnings = []
     if name and "#" not in name:
         warnings.append("建议填写完整战网昵称（含 #编号），否则可能无法识别己方玩家。")
-    if log_root and not os.path.isdir(log_root):
+    if log_root_supplied and log_root and not os.path.isdir(log_root):
         warnings.append(
             "日志目录不存在，请确认路径正确（通常为炉石安装目录下的 Logs 文件夹）。"
         )
@@ -1418,8 +1420,14 @@ def api_save_config(body: dict):
         if CTRL.automation_thread is not None and not _hot_requested(body):
             return {"ok": False, "error": "自动化运行中，请先停止后再修改配置。"}
         cfg = load_config()
-        cfg["name"] = name
-        cfg["log_root"] = log_root
+        if not name_supplied:
+            name = str(cfg.get("name") or "").strip()
+        if not log_root_supplied:
+            log_root = str(cfg.get("log_root") or "").strip()
+        if name_supplied:
+            cfg["name"] = name
+        if log_root_supplied:
+            cfg["log_root"] = log_root
         save_config(cfg)
         _apply_constants(name, log_root)
     _log(
@@ -2169,9 +2177,8 @@ def api_schedule(body: dict):
 # 校准窗口（calibrate_roi.py）。这里只维护「同一时刻最多一个」的会话句柄。
 _CALIBRATION_PROC = None
 CALIBRATION_HINT = (
-    "拖框对齐后按 S 保存：1 推荐面板 · 2 换牌确认按钮 · "
-    "3 AI胜率浮动条 · 4 结算开始按钮 · 5 段位数字 · "
-    "6 主界面「传统对战」 · 7 选择套牌 9 个卡组"
+    "拖框对齐后按 S 保存：换牌确认按钮 · 结算开始按钮 · 段位数字 · "
+    "主界面「传统对战」 · 选择套牌标题/卡组 · 模式按钮"
     "（Tab 切换，Esc 退出）"
 )
 

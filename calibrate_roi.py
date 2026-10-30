@@ -8,20 +8,17 @@
   * 自检：python calibrate_roi.py --selftest —— 窗口打开约 1 秒自动退出
   * 只拖框不跑 OCR：python calibrate_roi.py --no-ocr
 
-十三个可校准目标（按 Tab 切换，或直接点屏幕正中央的目标条）：
+十个可校准目标（按 Tab 切换，或直接点屏幕正中央的目标条）：
 
 | # | 目标 | 写入 ui_config.json | 对齐方法 |
 | --- | --- | --- | --- |
-| 1 | 盒子推荐面板（绿） | `recommendation_roi` | 把盒子的「打法参考A」面板框进绿框 |
-| 2 | 换牌推荐面板（黄绿） | `mulligan_recommendation_roi` | 框住换牌阶段的留牌建议（最多 4 条）：换牌 OCR 专用，比回合推荐大 |
-| 3 | 换牌「确认」按钮（蓝） | `mulligan_confirm_roi` | 框住换牌界面的确认按钮 |
-| 4 | 盒子「AI胜率」浮动条（橙） | `ai_win_rate_roi` | 框住左上角 AI胜率浮动条（兜底区域自动跟着外扩） |
-| 5 | 结算「开始」按钮（青绿） | `post_game_start_roi` | 框住每局结束底部的「开始」按钮：脚本用它判断结算界面点完没有，并点它的正中心 |
-| 6 | 段位数字（淡紫） | `post_game_rank_roi` | 框住结算界面右上角的段位名次数字：有数字=已上传说，数字就是名次 |
-| 7 | 主界面「传统对战」（金） | `main_menu_battle_roi` | **贴住那四个字**（不用框整条银条）：脚本在框 ±40px 内用这四个字的图案找它，认到就点认到的位置 |
-| 8 | 选择套牌「选择套牌」标题（粉） | `deck_select_title_roi` | 框住顶部那四个字。**判界面靠它，绝不能用右下角「开始」**（没选中卡组时「开始」不出现） |
-| 9 | 选择套牌 9 个卡组（天蓝） | `deck_grid_roi` | 框住 9 个卡组**整块**区域：脚本按 3×3 均分得到 9 个点击点，只有名牌上有字的格子才会被点 |
-| 10-13 | 模式按钮 + 三个盾牌（红） | `mode_click` 段 | 选卡组界面的模式按钮、以及狂野/标准/休闲三个盾牌：**框中心=点击点** |
+| 1 | 换牌「确认」按钮（蓝） | `mulligan_confirm_roi` | 框住换牌界面的确认按钮 |
+| 2 | 结算「开始」按钮（青绿） | `post_game_start_roi` | 框住每局结束底部的「开始」按钮：脚本用它判断结算界面点完没有，并点它的正中心 |
+| 3 | 段位数字（淡紫） | `post_game_rank_roi` | 框住结算界面右上角的段位名次数字：有数字=已上传说，数字就是名次 |
+| 4 | 主界面「传统对战」（金） | `main_menu_battle_roi` | **贴住那四个字**（不用框整条银条）：脚本在框 ±40px 内用这四个字的图案找它，认到就点认到的位置 |
+| 5 | 选择套牌「选择套牌」标题（粉） | `deck_select_title_roi` | 框住顶部那四个字。**判界面靠它，绝不能用右下角「开始」**（没选中卡组时「开始」不出现） |
+| 6 | 选择套牌 9 个卡组（天蓝） | `deck_grid_roi` | 框住 9 个卡组**整块**区域：脚本按 3×3 均分得到 9 个点击点，只有名牌上有字的格子才会被点 |
+| 7-10 | 模式按钮 + 三个盾牌（红） | `mode_click` 段 | 选卡组界面的模式按钮、以及狂野/标准/休闲三个盾牌：**框中心=点击点** |
 
 目标 7/8/9 是「界面识别」用的：拖它们的时候顶部提示条会实时显示判定结果
 （`框内文字匹配 1.00（阈值 0.80），对准了` / `9 格里 9 格有卡组名牌文字`），
@@ -853,7 +850,7 @@ class CalibrationSession:
         config = (self._config_provider() if self._config_provider is not None
                   else _load_config())
         targets = []
-        for target in calibration_targets(config):
+        for target in calibration_targets(config, include_cdp=False):
             target = dict(target)
             target["client_box"] = list(int(v) for v in target["box"])
             target["box"] = list(target["client_box"])

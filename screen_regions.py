@@ -287,7 +287,7 @@ def _mode_boxes() -> dict:
     return boxes
 
 
-def calibration_targets(config=None) -> list[dict]:
+def calibration_targets(config=None, *, include_cdp: bool = True) -> list[dict]:
     """可校准区域清单（校准工具/叠加层/AI胜率读取共用的唯一来源）。
 
     返回 [{key, config_key, label, short, color, box, hint}, ...]，
@@ -298,6 +298,8 @@ def calibration_targets(config=None) -> list[dict]:
     mode_boxes = _mode_boxes()
     targets = []
     for item in CALIBRATION_TARGETS:
+        if not include_cdp and item["key"] in {"recommendation", "mulligan_recommendation", "win_rate"}:
+            continue
         target = dict(item)
         point_key = target.get("point_key")
         if point_key:
